@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 import authRoutes from "./api/v1/auth/auth.routes.js";
 import { errorHandler } from "./middlewares/Errorhandler.middleware.js";
 import swaggerUi from "swagger-ui-express";
-import { swaggerSpec } from "../src/config/swager.js";
+import { swaggerSpec } from "./config/swager.js";
 
 dotenv.config();
 
