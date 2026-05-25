@@ -12,7 +12,7 @@ const options: swaggerJsdoc.Options = {
     servers: [
       {
         url: process.env.NODE_ENV === "production"
-          ? "https://railway.com/project/e6e74923-8b47-40a0-929a-2627b0cebff4?environmentId=90d79499-89da-41fa-8213-9c65aa2b9f2e"   // your deployed URL later
+          ? "https://wajba-ai-backend-production.up.railway.app" 
           : "http://localhost:3000",
         description: process.env.NODE_ENV === "production" ? "Production" : "Local",
       },
