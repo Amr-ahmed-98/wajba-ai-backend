@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import cors from "cors";
 import authRoutes from "./api/v1/auth/auth.routes.js";
 import { errorHandler } from "./middlewares/Errorhandler.middleware.js";
 import swaggerUi from "swagger-ui-express";
@@ -12,6 +13,18 @@ import { swaggerSpec } from "./config/swager.js";
 dotenv.config();
 
 const app: Application = express();
+
+// ── CORS — MUST be first, before helmet and everything else ──
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://your-production-frontend.com", // ← add your real domain later
+  ],
+  credentials: true, // Required because you use cookies (cookieParser)
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 // ── Security & body parsing — MUST come before all routes ────
 app.use(helmet());
