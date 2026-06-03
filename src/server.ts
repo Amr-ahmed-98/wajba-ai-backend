@@ -1,6 +1,10 @@
 import dotenv from "dotenv";
 dotenv.config(); // Always at the top
 
+// server.ts — add after dotenv.config()
+console.log("JWT_ACCESS_SECRET loaded:", !!process.env.JWT_ACCESS_SECRET);
+console.log("MONGODB_URI loaded:", !!process.env.MONGODB_URI);
+
 import app from "./app.js";
 import connectDB from "./config/database.js";
 import { seedAdmin } from "./utils/seedAdmin.js"
