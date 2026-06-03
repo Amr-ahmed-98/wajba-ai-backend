@@ -6,7 +6,22 @@ import { generateTokens, verifyRefreshToken } from "../services/token.service.js
 import { sendOtpEmail } from "../services/email.service.js";
 import { OAuth2Client } from "google-auth-library";
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+// ⚠️  Do NOT create the client at module-level.
+// Because this file is an ES-module import, it is evaluated BEFORE
+// dotenv.config() runs in server.ts (ESM hoisting), so
+// process.env.GOOGLE_CLIENT_ID would be undefined at init time.
+// We create the client lazily inside verifyGoogleToken instead.
+let _googleClient: OAuth2Client | null = null;
+const getGoogleClient = (): OAuth2Client => {
+  if (!_googleClient) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      throw new Error("GOOGLE_CLIENT_ID is not set in environment variables.");
+    }
+    _googleClient = new OAuth2Client(clientId);
+  }
+  return _googleClient;
+};
 
 // ─────────────────────────────────────────────────────────────
 // Internal helpers
@@ -15,7 +30,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 /** Verify a Google idToken and extract the user's identity */
 const verifyGoogleToken = async (idToken: string) => {
   try {
-    const ticket = await googleClient.verifyIdToken({
+    const ticket = await getGoogleClient().verifyIdToken({
       idToken,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
@@ -48,11 +63,14 @@ export const registerUser = async (userData: any) => {
     throw new ApiError(409, "An account with this email already exists");
   }
 
-  const hashedPassword = await bcrypt.hash(userData.password, 12);
+  // Strip confirmPassword — it's a UI-only field, not stored in the DB
+  const { confirmPassword: _ignored, ...cleanData } = userData;
+
+  const hashedPassword = await bcrypt.hash(cleanData.password, 12);
 
   const user = await User.create({
-    ...userData,
-    email: userData.email.toLowerCase(),
+    ...cleanData,
+    email: cleanData.email.toLowerCase(),
     password: hashedPassword,
   });
 

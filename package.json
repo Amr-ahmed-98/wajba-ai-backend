@@ -4,9 +4,9 @@
   "description": "backend for wajba app",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "nodemon --watch src --ext ts,json --exec \"node --loader ts-node/esm/transpile-only\" src/server.ts",
+    "dev": "set NODE_ENV=development && nodemon --watch src --ext ts,json --exec \"node --loader ts-node/esm/transpile-only\" src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "set NODE_ENV=production && node dist/server.js"
   },
   "keywords": [],
   "author": "",
