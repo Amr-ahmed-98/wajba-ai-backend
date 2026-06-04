@@ -221,5 +221,7 @@ export const handleForgotPassword = async (email: string) => {
   user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // Valid for 10 minutes
   await user.save();
 
+  // sendOtpEmail now throws ApiError(502) on SMTP failure — let it propagate
+  // so the controller returns the real error instead of a generic 500.
   await sendOtpEmail(user.email, otp);
 };
