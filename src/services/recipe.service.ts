@@ -18,7 +18,7 @@ export const parseLang = (header?: string): Lang =>
 // ─────────────────────────────────────────────────────────────
 const validateEnvVars = (): void => {
   const required: Record<string, string | undefined> = {
-    GEMINI_API_KEY:          process.env.GEMINI_API_KEY,
+    GROQ_API_KEY:            process.env.GROQ_API_KEY,
     CLOUDFLARE_ACCOUNT_ID:   process.env.CLOUDFLARE_ACCOUNT_ID,
     CLOUDFLARE_API_TOKEN:    process.env.CLOUDFLARE_API_TOKEN,
     CLOUDINARY_CLOUD_NAME:   process.env.CLOUDINARY_CLOUD_NAME,
@@ -128,21 +128,22 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Generate structured bilingual recipe JSON — Gemini 2.0 Flash
-// Free tier: 15 RPM — 3× more headroom than 2.5 Pro (5 RPM).
-// Output quality for structured JSON generation is equivalent.
+// Generate structured bilingual recipe JSON — Groq
+// Model : llama-3.3-70b-versatile
+// Free tier: 30 RPM, 14,400 RPD — no daily quota issues.
+// API is OpenAI-compatible (same request/response shape).
 // ─────────────────────────────────────────────────────────────
-const generateRecipeWithGemini = async (
+const generateRecipeWithGroq = async (
   recipeIndex:    number,
   batchNumber:    number,
   existingTitles: string[]
 ): Promise<any> => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  if (!geminiApiKey) throw new ApiError(500, "Gemini API key is not configured.");
+  const groqApiKey = process.env.GROQ_API_KEY;
+  if (!groqApiKey) throw new ApiError(500, "Groq API key is not configured.");
 
   const avoidTitles = existingTitles.length ? existingTitles.join(", ") : "none yet";
 
-  console.log(`    🤖 Calling Gemini for recipe ${recipeIndex + 1}...`);
+  console.log(`    🤖 Calling Groq (llama-3.3-70b) for recipe ${recipeIndex + 1}...`);
 
   const prompt = `You are a professional chef and nutritionist.
 Generate a unique recipe — number ${recipeIndex + 1} of 30 in batch ${batchNumber}.
@@ -192,49 +193,56 @@ Use EXACTLY this JSON structure:
   "generationBatch": ${batchNumber}
 }`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.9, maxOutputTokens: 3000 },
-      }),
-    }
-  );
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${groqApiKey}`,
+      "Content-Type":  "application/json",
+    },
+    body: JSON.stringify({
+      model:       "llama-3.3-70b-versatile",
+      temperature: 0.9,
+      max_tokens:  3000,
+      messages: [
+        {
+          role:    "user",
+          content: prompt,
+        },
+      ],
+    }),
+  });
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
-    console.error(`    ❌ Gemini HTTP ${response.status}:`, JSON.stringify(errBody));
-    throw new ApiError(502, `Gemini API failed (HTTP ${response.status}): ${JSON.stringify(errBody)}`);
+    console.error(`    ❌ Groq HTTP ${response.status}:`, JSON.stringify(errBody));
+    throw new ApiError(502, `Groq API failed (HTTP ${response.status}): ${JSON.stringify(errBody)}`);
   }
 
-  const data     = await response.json() as any;
+  const data = await response.json() as any;
 
-  // Log finish reason — catches SAFETY / RECITATION / MAX_TOKENS blocks
-  const finishReason: string = data.candidates?.[0]?.finishReason ?? "UNKNOWN";
-  if (finishReason !== "STOP") {
-    console.error(`    ❌ Gemini finishReason=${finishReason} for recipe ${recipeIndex + 1}`, JSON.stringify(data));
-    throw new ApiError(502, `Gemini stopped with finishReason=${finishReason} for recipe ${recipeIndex + 1}`);
+  // Surface stop_reason issues (e.g. length, content_filter)
+  const stopReason: string = data.choices?.[0]?.finish_reason ?? "unknown";
+  if (stopReason !== "stop") {
+    console.error(`    ❌ Groq finish_reason=${stopReason} for recipe ${recipeIndex + 1}`, JSON.stringify(data));
+    throw new ApiError(502, `Groq stopped with finish_reason=${stopReason} for recipe ${recipeIndex + 1}`);
   }
 
-  const rawText: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const rawText: string = data.choices?.[0]?.message?.content ?? "";
   if (!rawText) {
-    console.error(`    ❌ Gemini returned empty text. Full response:`, JSON.stringify(data));
-    throw new ApiError(502, `Gemini returned empty text for recipe ${recipeIndex + 1}`);
+    console.error(`    ❌ Groq returned empty content. Full response:`, JSON.stringify(data));
+    throw new ApiError(502, `Groq returned empty content for recipe ${recipeIndex + 1}`);
   }
 
-  // Strip markdown fences Gemini sometimes wraps despite instructions
+  // Strip any accidental markdown fences
   const clean = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
-  console.log(`    ✅ Gemini responded (${clean.length} chars), parsing JSON...`);
+  console.log(`    ✅ Groq responded (${clean.length} chars), parsing JSON...`);
 
   try {
     return JSON.parse(clean);
   } catch (parseErr: any) {
     console.error(`    ❌ JSON parse failed. Raw text (first 500 chars):\n${clean.slice(0, 500)}`);
-    throw new ApiError(502, `Gemini returned invalid JSON for recipe ${recipeIndex + 1}: ${clean.slice(0, 200)}`);
+    throw new ApiError(502, `Groq returned invalid JSON for recipe ${recipeIndex + 1}: ${clean.slice(0, 200)}`);
   }
 };
 
@@ -247,8 +255,8 @@ export const generateSingleRecipe = async (
   batchNumber:    number,
   existingTitles: string[]
 ): Promise<HydratedDocument<IRecipe>> => {
-  // Step 1 — Gemini
-  const recipeData   = await generateRecipeWithGemini(recipeIndex, batchNumber, existingTitles);
+  // Step 1 — Groq
+  const recipeData   = await generateRecipeWithGroq(recipeIndex, batchNumber, existingTitles);
   const imagePrompt: string = recipeData.imagePrompt
     ?? `Photorealistic food photo of ${recipeData.title?.en ?? "a dish"}`;
   delete recipeData.imagePrompt;
@@ -295,10 +303,10 @@ export const generateWeeklyRecipes = async (): Promise<{ created: number; errors
       existingTitles.push(recipe.title.en);
       created.push(recipe);
 
-      // 5-second pause — stays comfortably within Gemini 2.0 Flash free-tier
-      // limit of 15 RPM (60s ÷ 15 = 4s minimum; 5s gives a safety buffer).
-      // Total run time for 30 recipes: ~2.5 minutes.
-      if (i < 29) await new Promise((r) => setTimeout(r, 5000));
+      // 3-second pause — stays within Groq free-tier limit of 30 RPM
+      // (60s ÷ 30 = 2s minimum; 3s gives a safety buffer).
+      // Total run time for 30 recipes: ~1.5 minutes.
+      if (i < 29) await new Promise((r) => setTimeout(r, 3000));
 
     } catch (err: any) {
       const msg = `Recipe ${i + 1} failed: ${err.message}`;

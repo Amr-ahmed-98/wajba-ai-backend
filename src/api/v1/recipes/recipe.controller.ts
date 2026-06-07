@@ -96,7 +96,7 @@ export const generateRecipesDebug = async (
 
     // Check env vars and surface missing ones immediately in the response
     const requiredVars = [
-      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
       "CLOUDFLARE_ACCOUNT_ID",
       "CLOUDFLARE_API_TOKEN",
       "CLOUDINARY_CLOUD_NAME",
