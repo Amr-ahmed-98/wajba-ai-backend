@@ -111,20 +111,32 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
   // Cloudflare flux-1-schnell returns raw image bytes — NOT JSON.
   // Detect if it accidentally returned JSON (error payload) vs actual image data.
   const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const errBody = await response.json().catch(() => ({}));
-    console.error(`    ❌ Cloudflare AI returned JSON instead of image:`, JSON.stringify(errBody));
-    throw new ApiError(502, `Cloudflare AI returned an error payload: ${JSON.stringify(errBody)}`);
+
+if (contentType.includes("application/json")) {
+  const body: any = await response.json().catch(() => ({}));
+
+  // Cloudflare Workers AI returns { result: { image: "<base64>" }, success: true }
+  const base64Image = body?.result?.image;
+  if (body?.success && typeof base64Image === "string" && base64Image.length > 0) {
+    console.log(`    ✅ Cloudflare image generated (base64 JSON response)`);
+    // The base64 string may be JPEG or PNG — detect from the data
+    const mimeType = base64Image.startsWith("/9j/") ? "image/jpeg" : "image/png";
+    return `data:${mimeType};base64,${base64Image}`;
   }
 
-  const buffer = await response.arrayBuffer();
-  if (!buffer || buffer.byteLength === 0) {
-    throw new ApiError(502, "Cloudflare AI returned an empty image buffer.");
-  }
+  // It's JSON but not a successful image response — it's a real error
+  console.error(`    ❌ Cloudflare AI returned JSON error:`, JSON.stringify(body));
+  throw new ApiError(502, `Cloudflare AI returned an error payload: ${JSON.stringify(body)}`);
+}
 
-  console.log(`    ✅ Cloudflare image generated (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
-  const base64 = Buffer.from(buffer).toString("base64");
-  return `data:image/png;base64,${base64}`;
+// Raw binary response path (fallback)
+const buffer = await response.arrayBuffer();
+if (!buffer || buffer.byteLength === 0) {
+  throw new ApiError(502, "Cloudflare AI returned an empty image buffer.");
+}
+console.log(`    ✅ Cloudflare image generated (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
+const base64 = Buffer.from(buffer).toString("base64");
+return `data:image/png;base64,${base64}`;
 };
 
 // ─────────────────────────────────────────────────────────────
