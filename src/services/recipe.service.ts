@@ -194,16 +194,22 @@ Use EXACTLY this JSON structure:
     "fat": 12
   },
   "imagePrompt": "Photorealistic food photography of [dish name], beautifully plated, natural lighting, top-down view, high resolution, white background",
-  "timeFilters":   ["<zero or more of: quick_meal|under_20_min|on_budget|saves_time>"],
-  "desireFilters": ["<one or more of: savoury|sweet|light|spicy>"],
-  "moodFilters":   ["<one or more of: healthy|comfort_food|crispy|full_meal>"],
-  "cuisine":       "<one of: italian|egyptian|japanese|mexican|indian|arabic|french|asian>",
-  "mealTypes":     ["<one or more of: breakfast|lunch|dinner|snack|dessert>"],
-  "dishType":      "<one of: pasta|seafood|soup|salad|pizza|grill|sandwich|bowl>",
-  "occasionTags":  ["<zero or more of: quick_meal|family_dinner|romantic_dinner|healthy_meal_prep>"],
-  "healthTags":    ["<zero or more of: keto|vegan|high_protein|low_calorie|low_carb|vegetarian|paleo>"],
+  "timeFilters":   ["<zero or more values, each MUST be one of EXACTLY these 4 strings: quick_meal | under_20_min | on_budget | saves_time — NO other strings allowed>"],
+  "desireFilters": ["<one or more values, each MUST be one of EXACTLY these 4 strings: savoury | sweet | light | spicy — NO other strings allowed>"],
+  "moodFilters":   ["<one or more values, each MUST be one of EXACTLY these 4 strings: healthy | comfort_food | crispy | full_meal — NOTE: 'light' is NOT valid here, it belongs in desireFilters only>"],
+  "cuisine":       "<MUST be exactly one of: italian | egyptian | japanese | mexican | indian | arabic | french | asian>",
+  "mealTypes":     ["<one or more values, each MUST be one of EXACTLY these 5 strings: breakfast | lunch | dinner | snack | dessert>"],
+  "dishType":      "<MUST be exactly one of: pasta | seafood | soup | salad | pizza | grill | sandwich | bowl>",
+  "occasionTags":  ["<zero or more values, each MUST be one of EXACTLY these 4 strings: quick_meal | family_dinner | romantic_dinner | healthy_meal_prep>"],
+  "healthTags":    ["<zero or more values, each MUST be one of EXACTLY these 7 strings: keto | vegan | high_protein | low_calorie | low_carb | vegetarian | paleo>"],
   "generationBatch": ${batchNumber}
-}`;
+}
+
+CRITICAL FILTER RULES — violating these will break the database schema:
+- "light" is ONLY valid in "desireFilters". It is FORBIDDEN in "moodFilters".
+- "quick_meal" is ONLY valid in "timeFilters" and "occasionTags". It is FORBIDDEN in any other array.
+- Every value in every filter array MUST come from that array's exact allowed list above — do not invent new values.
+- Do not add values from one filter's list into a different filter's array.`;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -259,6 +265,64 @@ Use EXACTLY this JSON structure:
 };
 
 // ─────────────────────────────────────────────────────────────
+// Valid enum sets — single source of truth for sanitization.
+// Must stay in sync with recipe.model.ts and recipe.validation.ts.
+// ─────────────────────────────────────────────────────────────
+const VALID_ENUMS = {
+  timeFilters:   new Set(["quick_meal","under_20_min","on_budget","saves_time"]),
+  desireFilters: new Set(["savoury","sweet","light","spicy"]),
+  moodFilters:   new Set(["healthy","comfort_food","crispy","full_meal"]),
+  cuisine:       new Set(["italian","egyptian","japanese","mexican","indian","arabic","french","asian"]),
+  mealTypes:     new Set(["breakfast","lunch","dinner","snack","dessert"]),
+  dishType:      new Set(["pasta","seafood","soup","salad","pizza","grill","sandwich","bowl"]),
+  occasionTags:  new Set(["quick_meal","family_dinner","romantic_dinner","healthy_meal_prep"]),
+  healthTags:    new Set(["keto","vegan","high_protein","low_calorie","low_carb","vegetarian","paleo"]),
+  badge:         new Set(["keto","vegan","high_protein","low_calorie","low_carb","muscle_gain","premium"]),
+} as const;
+
+// ─────────────────────────────────────────────────────────────
+// Sanitize LLM output before hitting Mongoose.
+// Strips any value that doesn't belong in a given filter array
+// so a cross-assigned value (e.g. "light" in moodFilters) never
+// reaches Recipe.create() and causes a validation crash.
+// Logs every removed value so bad LLM behaviour is visible.
+// ─────────────────────────────────────────────────────────────
+const sanitizeRecipeFilters = (data: any, recipeIndex: number): any => {
+  const sanitizeArray = (field: string, values: any, validSet: Set<string>): string[] => {
+    if (!Array.isArray(values)) return [];
+    const valid   = values.filter((v: any) => typeof v === "string" && validSet.has(v));
+    const removed = values.filter((v: any) => !validSet.has(v));
+    if (removed.length) {
+      console.warn(
+        `    ⚠️  Recipe ${recipeIndex + 1}: removed invalid ${field} values: [${removed.join(", ")}]`
+      );
+    }
+    return valid;
+  };
+
+  const sanitizeScalar = (field: string, value: any, validSet: Set<string>, fallback: string): string => {
+    if (typeof value === "string" && validSet.has(value)) return value;
+    console.warn(
+      `    ⚠️  Recipe ${recipeIndex + 1}: invalid ${field} value "${value}" — falling back to "${fallback}"`
+    );
+    return fallback;
+  };
+
+  return {
+    ...data,
+    timeFilters:   sanitizeArray ("timeFilters",   data.timeFilters,   VALID_ENUMS.timeFilters),
+    desireFilters: sanitizeArray ("desireFilters",  data.desireFilters, VALID_ENUMS.desireFilters),
+    moodFilters:   sanitizeArray ("moodFilters",    data.moodFilters,   VALID_ENUMS.moodFilters),
+    mealTypes:     sanitizeArray ("mealTypes",      data.mealTypes,     VALID_ENUMS.mealTypes),
+    occasionTags:  sanitizeArray ("occasionTags",   data.occasionTags,  VALID_ENUMS.occasionTags),
+    healthTags:    sanitizeArray ("healthTags",     data.healthTags,    VALID_ENUMS.healthTags),
+    cuisine:       sanitizeScalar("cuisine",        data.cuisine,       VALID_ENUMS.cuisine,  "italian"),
+    dishType:      sanitizeScalar("dishType",       data.dishType,      VALID_ENUMS.dishType,  "bowl"),
+    badge:         sanitizeScalar("badge",          data.badge,         VALID_ENUMS.badge,     "premium"),
+  };
+};
+
+// ─────────────────────────────────────────────────────────────
 // Core single-recipe pipeline — shared by both the full batch
 // loop and the debug endpoint (which calls it once).
 // ─────────────────────────────────────────────────────────────
@@ -268,10 +332,16 @@ export const generateSingleRecipe = async (
   existingTitles: string[]
 ): Promise<HydratedDocument<IRecipe>> => {
   // Step 1 — Groq
-  const recipeData   = await generateRecipeWithGroq(recipeIndex, batchNumber, existingTitles);
-  const imagePrompt: string = recipeData.imagePrompt
-    ?? `Photorealistic food photo of ${recipeData.title?.en ?? "a dish"}`;
-  delete recipeData.imagePrompt;
+  const rawRecipeData = await generateRecipeWithGroq(recipeIndex, batchNumber, existingTitles);
+  const imagePrompt: string = rawRecipeData.imagePrompt
+    ?? `Photorealistic food photo of ${rawRecipeData.title?.en ?? "a dish"}`;
+  delete rawRecipeData.imagePrompt;
+
+  // Step 1b — Sanitize all filter/enum fields before they touch Mongoose.
+  // This catches any values the LLM cross-assigned to the wrong filter array
+  // (e.g. "light" in moodFilters) so Recipe.create() never throws a
+  // validation error and leaves an orphaned Cloudinary image behind.
+  const recipeData = sanitizeRecipeFilters(rawRecipeData, recipeIndex);
 
   // Step 2 — Cloudflare image
   console.log(`    📸 Generating image for: ${recipeData.title?.en}`);
