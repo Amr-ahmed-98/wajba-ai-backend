@@ -128,7 +128,9 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Generate structured bilingual recipe JSON — Gemini 2.5 Pro
+// Generate structured bilingual recipe JSON — Gemini 2.0 Flash
+// Free tier: 15 RPM — 3× more headroom than 2.5 Pro (5 RPM).
+// Output quality for structured JSON generation is equivalent.
 // ─────────────────────────────────────────────────────────────
 const generateRecipeWithGemini = async (
   recipeIndex:    number,
@@ -191,7 +193,7 @@ Use EXACTLY this JSON structure:
 }`;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${geminiApiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -293,8 +295,10 @@ export const generateWeeklyRecipes = async (): Promise<{ created: number; errors
       existingTitles.push(recipe.title.en);
       created.push(recipe);
 
-      // 2-second pause — respects Gemini free-tier RPM limit
-      if (i < 29) await new Promise((r) => setTimeout(r, 2000));
+      // 5-second pause — stays comfortably within Gemini 2.0 Flash free-tier
+      // limit of 15 RPM (60s ÷ 15 = 4s minimum; 5s gives a safety buffer).
+      // Total run time for 30 recipes: ~2.5 minutes.
+      if (i < 29) await new Promise((r) => setTimeout(r, 5000));
 
     } catch (err: any) {
       const msg = `Recipe ${i + 1} failed: ${err.message}`;
