@@ -12,6 +12,34 @@ export const parseLang = (header?: string): Lang =>
   header === "ar" ? "ar" : "en";
 
 // ─────────────────────────────────────────────────────────────
+// Env-var validation — called once at the start of any
+// generation run so failures surface immediately with a clear
+// message instead of dying silently mid-loop.
+// ─────────────────────────────────────────────────────────────
+const validateEnvVars = (): void => {
+  const required: Record<string, string | undefined> = {
+    GEMINI_API_KEY:          process.env.GEMINI_API_KEY,
+    CLOUDFLARE_ACCOUNT_ID:   process.env.CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_API_TOKEN:    process.env.CLOUDFLARE_API_TOKEN,
+    CLOUDINARY_CLOUD_NAME:   process.env.CLOUDINARY_CLOUD_NAME,
+    CLOUDINARY_API_KEY:      process.env.CLOUDINARY_API_KEY,
+    CLOUDINARY_API_SECRET:   process.env.CLOUDINARY_API_SECRET,
+  };
+
+  const missing = Object.entries(required)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+
+  if (missing.length) {
+    const msg = `Missing required environment variables: ${missing.join(", ")}`;
+    console.error(`❌ ENV CHECK FAILED — ${msg}`);
+    throw new ApiError(500, msg);
+  }
+
+  console.log("✅ All required environment variables are present.");
+};
+
+// ─────────────────────────────────────────────────────────────
 // Cloudinary — lazy config
 // ─────────────────────────────────────────────────────────────
 let _cloudinaryConfigured = false;
@@ -44,7 +72,8 @@ const uploadImageToCloudinary = (dataUri: string, publicId: string): Promise<str
       },
       (error, result) => {
         if (error || !result) {
-          reject(new ApiError(502, "Failed to upload recipe image to Cloudinary."));
+          console.error("❌ Cloudinary upload error:", error);
+          reject(new ApiError(502, `Failed to upload recipe image to Cloudinary: ${error?.message ?? "unknown error"}`));
           return;
         }
         resolve(result.secure_url);
@@ -62,6 +91,8 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
   const apiToken  = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) throw new ApiError(500, "Image generation service is not configured.");
 
+  console.log(`    🎨 Calling Cloudflare AI for image...`);
+
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
     {
@@ -72,12 +103,27 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
   );
 
   if (!response.ok) {
-    console.error("Cloudflare AI error:", await response.json().catch(() => ({})));
-    throw new ApiError(502, "Failed to generate recipe image.");
+    const errBody = await response.json().catch(() => ({}));
+    console.error(`    ❌ Cloudflare AI HTTP ${response.status}:`, JSON.stringify(errBody));
+    throw new ApiError(502, `Cloudflare AI failed (HTTP ${response.status}): ${JSON.stringify(errBody)}`);
   }
 
-  const buffer  = await response.arrayBuffer();
-  const base64  = Buffer.from(buffer).toString("base64");
+  // Cloudflare flux-1-schnell returns raw image bytes — NOT JSON.
+  // Detect if it accidentally returned JSON (error payload) vs actual image data.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const errBody = await response.json().catch(() => ({}));
+    console.error(`    ❌ Cloudflare AI returned JSON instead of image:`, JSON.stringify(errBody));
+    throw new ApiError(502, `Cloudflare AI returned an error payload: ${JSON.stringify(errBody)}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength === 0) {
+    throw new ApiError(502, "Cloudflare AI returned an empty image buffer.");
+  }
+
+  console.log(`    ✅ Cloudflare image generated (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
+  const base64 = Buffer.from(buffer).toString("base64");
   return `data:image/png;base64,${base64}`;
 };
 
@@ -94,10 +140,8 @@ const generateRecipeWithGemini = async (
 
   const avoidTitles = existingTitles.length ? existingTitles.join(", ") : "none yet";
 
-  // ── Prompt ────────────────────────────────────────────────────
-  // All localised fields must have BOTH "en" and "ar" keys.
-  // Amounts stay flat strings ("200g") — numbers are universal.
-  // ─────────────────────────────────────────────────────────────
+  console.log(`    🤖 Calling Gemini for recipe ${recipeIndex + 1}...`);
+
   const prompt = `You are a professional chef and nutritionist.
 Generate a unique recipe — number ${recipeIndex + 1} of 30 in batch ${batchNumber}.
 
@@ -159,78 +203,115 @@ Use EXACTLY this JSON structure:
   );
 
   if (!response.ok) {
-    console.error("Gemini API error:", await response.json().catch(() => ({})));
-    throw new ApiError(502, `Gemini API failed for recipe ${recipeIndex + 1}`);
+    const errBody = await response.json().catch(() => ({}));
+    console.error(`    ❌ Gemini HTTP ${response.status}:`, JSON.stringify(errBody));
+    throw new ApiError(502, `Gemini API failed (HTTP ${response.status}): ${JSON.stringify(errBody)}`);
   }
 
-  const data    = await response.json() as any;
+  const data     = await response.json() as any;
+
+  // Log finish reason — catches SAFETY / RECITATION / MAX_TOKENS blocks
+  const finishReason: string = data.candidates?.[0]?.finishReason ?? "UNKNOWN";
+  if (finishReason !== "STOP") {
+    console.error(`    ❌ Gemini finishReason=${finishReason} for recipe ${recipeIndex + 1}`, JSON.stringify(data));
+    throw new ApiError(502, `Gemini stopped with finishReason=${finishReason} for recipe ${recipeIndex + 1}`);
+  }
+
   const rawText: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const clean   = rawText.replace(/```json|```/g, "").trim();
+  if (!rawText) {
+    console.error(`    ❌ Gemini returned empty text. Full response:`, JSON.stringify(data));
+    throw new ApiError(502, `Gemini returned empty text for recipe ${recipeIndex + 1}`);
+  }
+
+  // Strip markdown fences Gemini sometimes wraps despite instructions
+  const clean = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+
+  console.log(`    ✅ Gemini responded (${clean.length} chars), parsing JSON...`);
 
   try {
     return JSON.parse(clean);
-  } catch {
+  } catch (parseErr: any) {
+    console.error(`    ❌ JSON parse failed. Raw text (first 500 chars):\n${clean.slice(0, 500)}`);
     throw new ApiError(502, `Gemini returned invalid JSON for recipe ${recipeIndex + 1}: ${clean.slice(0, 200)}`);
   }
+};
+
+// ─────────────────────────────────────────────────────────────
+// Core single-recipe pipeline — shared by both the full batch
+// loop and the debug endpoint (which calls it once).
+// ─────────────────────────────────────────────────────────────
+export const generateSingleRecipe = async (
+  recipeIndex:    number,
+  batchNumber:    number,
+  existingTitles: string[]
+): Promise<HydratedDocument<IRecipe>> => {
+  // Step 1 — Gemini
+  const recipeData   = await generateRecipeWithGemini(recipeIndex, batchNumber, existingTitles);
+  const imagePrompt: string = recipeData.imagePrompt
+    ?? `Photorealistic food photo of ${recipeData.title?.en ?? "a dish"}`;
+  delete recipeData.imagePrompt;
+
+  // Step 2 — Cloudflare image
+  console.log(`    📸 Generating image for: ${recipeData.title?.en}`);
+  const imageDataUri = await generateRecipeImage(imagePrompt);
+
+  // Step 3 — Cloudinary upload
+  const slug     = (recipeData.title?.en ?? `recipe-${recipeIndex}`)
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+  const publicId = `batch-${batchNumber}-${recipeIndex + 1}-${slug}`;
+  console.log(`    ☁️  Uploading to Cloudinary as: recipe_images/${publicId}`);
+  const imageUrl = await uploadImageToCloudinary(imageDataUri, publicId);
+
+  // Step 4 — MongoDB
+  console.log(`    💾 Saving to MongoDB...`);
+  const recipe = await Recipe.create({ ...recipeData, imageUrl, generatedAt: new Date() });
+
+  console.log(`    ✅ Saved: "${recipe.title.en}" / "${recipe.title.ar}"`);
+  return recipe;
 };
 
 // ─────────────────────────────────────────────────────────────
 // Weekly generation — 30 bilingual recipes per run
 // ─────────────────────────────────────────────────────────────
 export const generateWeeklyRecipes = async (): Promise<{ created: number; errors: string[] }> => {
+  // Validate all env vars upfront — throws immediately if anything is missing
+  validateEnvVars();
+
   const lastRecipe  = await Recipe.findOne().sort({ generationBatch: -1 }).select("generationBatch");
   const batchNumber = (lastRecipe?.generationBatch ?? 0) + 1;
 
-  const errors:         string[]                   = [];
+  const errors:         string[] = [];
   const created:        HydratedDocument<IRecipe>[] = [];
-  const existingTitles: string[]                   = [];
+  const existingTitles: string[] = [];
 
   console.log(`🍳 Starting bilingual recipe generation — batch #${batchNumber}`);
 
   for (let i = 0; i < 30; i++) {
     try {
-      console.log(`  Generating recipe ${i + 1}/30...`);
-
-      // 1️⃣ Gemini — bilingual structured JSON
-      const recipeData  = await generateRecipeWithGemini(i, batchNumber, existingTitles);
-      const imagePrompt: string = recipeData.imagePrompt
-        ?? `Photorealistic food photo of ${recipeData.title?.en ?? "a dish"}`;
-      delete recipeData.imagePrompt; // not stored in DB
-
-      existingTitles.push(recipeData.title?.en ?? `recipe-${i}`);
-
-      // 2️⃣ Cloudflare Workers AI — generate image
-      const imageDataUri = await generateRecipeImage(imagePrompt);
-
-      // 3️⃣ Cloudinary — persist image
-      const slug     = (recipeData.title?.en ?? `recipe-${i}`)
-        .toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-      const publicId = `batch-${batchNumber}-${i + 1}-${slug}`;
-      const imageUrl = await uploadImageToCloudinary(imageDataUri, publicId);
-
-      // 4️⃣ MongoDB — save full bilingual document
-      const recipe = await Recipe.create({ ...recipeData, imageUrl, generatedAt: new Date() });
-
+      console.log(`\n  ── Recipe ${i + 1}/30 ──`);
+      const recipe = await generateSingleRecipe(i, batchNumber, existingTitles);
+      existingTitles.push(recipe.title.en);
       created.push(recipe);
-      console.log(`  ✅ ${i + 1}/30 saved: ${recipe.title.en} / ${recipe.title.ar}`);
 
       // 2-second pause — respects Gemini free-tier RPM limit
-      await new Promise((r) => setTimeout(r, 2000));
+      if (i < 29) await new Promise((r) => setTimeout(r, 2000));
 
     } catch (err: any) {
       const msg = `Recipe ${i + 1} failed: ${err.message}`;
       errors.push(msg);
       console.error(`  ❌ ${msg}`);
+      // Continue with remaining recipes even if one fails
     }
   }
+
+  console.log(`\n🏁 Generation complete — ${created.length}/30 saved, ${errors.length} errors.`);
+  if (errors.length) console.error("Errors summary:", errors);
 
   return { created: created.length, errors };
 };
 
 // ─────────────────────────────────────────────────────────────
 // Flatten localised fields — called before sending to client
-// Picks only the requested language so the frontend never sees
-// the { en, ar } structure — it always gets plain strings.
 // ─────────────────────────────────────────────────────────────
 const flattenLang = (recipe: any, lang: Lang): any => {
   const pick = (field: { en: string; ar: string } | undefined) =>
@@ -281,21 +362,21 @@ export const listRecipes = async (input: ListRecipesInput) => {
   const filter: Record<string, any> = {};
   const toArray = (v?: string | string[]) => v ? (Array.isArray(v) ? v : [v]) : undefined;
 
-  const t = toArray(time);
-  const d = toArray(desire);
-  const m = toArray(mood);
-  const ml= toArray(mealType);
-  const o = toArray(occasion);
-  const h = toArray(health);
+  const t  = toArray(time);
+  const d  = toArray(desire);
+  const m  = toArray(mood);
+  const ml = toArray(mealType);
+  const o  = toArray(occasion);
+  const h  = toArray(health);
 
-  if (t)  filter.timeFilters   = { $in: t };
-  if (d)  filter.desireFilters = { $in: d };
-  if (m)  filter.moodFilters   = { $in: m };
-  if (cuisine)  filter.cuisine  = cuisine;
-  if (ml) filter.mealTypes     = { $in: ml };
-  if (dishType) filter.dishType = dishType;
-  if (o)  filter.occasionTags  = { $in: o };
-  if (h)  filter.healthTags    = { $in: h };
+  if (t)       filter.timeFilters   = { $in: t };
+  if (d)       filter.desireFilters = { $in: d };
+  if (m)       filter.moodFilters   = { $in: m };
+  if (cuisine) filter.cuisine       = cuisine;
+  if (ml)      filter.mealTypes     = { $in: ml };
+  if (dishType)filter.dishType      = dishType;
+  if (o)       filter.occasionTags  = { $in: o };
+  if (h)       filter.healthTags    = { $in: h };
 
   const sortMap: Record<string, Record<string, 1 | -1>> = {
     newest:      { createdAt: -1 },
@@ -308,13 +389,11 @@ export const listRecipes = async (input: ListRecipesInput) => {
       .sort(sortMap[sort] ?? sortMap.newest)
       .skip((page - 1) * limit)
       .limit(limit)
-      // Only card-level fields — localised + stats + image
       .select("title description imageUrl badge cardTip nutrition.calories nutrition.protein views averageRating ratingCount commentCount createdAt")
       .lean(),
     Recipe.countDocuments(filter),
   ]);
 
-  // Flatten each recipe to the requested language
   const localised = recipes.map((r) => flattenLang(r, lang));
 
   return {
@@ -340,14 +419,12 @@ export const getRecipeById = async (
   const recipe = await Recipe.findById(recipeId).select("+viewedBy");
   if (!recipe) throw new ApiError(404, "Recipe not found.");
 
-  // Increment view exactly once per viewer
   if (!recipe.viewedBy.includes(viewerKey)) {
     recipe.viewedBy.push(viewerKey);
     recipe.views += 1;
     await recipe.save();
   }
 
-  // Convert to plain object, strip viewedBy, then flatten to requested language
   const plain = recipe.toObject() as any;
   delete plain.viewedBy;
 

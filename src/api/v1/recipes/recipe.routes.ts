@@ -39,6 +39,57 @@ const router = Router();
  */
 router.post("/generate", recipeController.generateRecipes);
 
+// ── POST /api/v1/recipes/generate-debug ──────────────────────
+/**
+ * @swagger
+ * /api/v1/recipes/generate-debug:
+ *   post:
+ *     summary: "[DEBUG] Generate exactly 1 recipe synchronously and return the result or error"
+ *     tags: [Recipes]
+ *     description: >
+ *       TEMPORARY diagnostic endpoint. Runs the full pipeline (Gemini → Cloudflare AI → Cloudinary → MongoDB)
+ *       for a single recipe and returns the result — or the full error message — directly in the HTTP response.
+ *       Use this to confirm all env vars and external services are working before triggering the full 30-recipe run.
+ *       DELETE once generation is confirmed working.
+ *     parameters:
+ *       - in: header
+ *         name: x-admin-secret
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Debug recipe generated and saved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:       { type: string }
+ *                     titleEn:  { type: string }
+ *                     titleAr:  { type: string }
+ *                     imageUrl: { type: string }
+ *                     badge:    { type: string }
+ *       500:
+ *         description: Full error details — which step failed and why
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: false }
+ *                 message: { type: string }
+ *                 missingVars: { type: array, items: { type: string } }
+ *                 stack: { type: string }
+ *       403:
+ *         description: Invalid or missing admin secret
+ */
+router.post("/generate-debug", recipeController.generateRecipesDebug);
+
 // ── GET /api/v1/recipes/filters ───────────────────────────────
 /**
  * @swagger
