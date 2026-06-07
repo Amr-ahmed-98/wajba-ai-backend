@@ -4,15 +4,16 @@ import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
 import cors from "cors";
-import authRoutes from "./api/v1/auth/auth.routes.js";
-import feedbackRoutes from "./api/v1/feedback/feedback.routes.js"; 
+import authRoutes    from "./api/v1/auth/auth.routes.js";
+import feedbackRoutes from "./api/v1/feedback/feedback.routes.js";
+import recipeRoutes  from "./api/v1/recipes/recipe.routes.js"; // ← NEW
 import { errorHandler } from "./middlewares/Errorhandler.middleware.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swager.js";
 
 const app: Application = express();
 
-// ── CORS — MUST be first, before helmet and everything else ──
+// ── CORS ──────────────────────────────────────────────────────
 app.use(cors({
   origin: [
     "http://localhost:3000",
@@ -24,7 +25,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-// ── Security & body parsing — MUST come before all routes ────
+// ── Security & body parsing ───────────────────────────────────
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -39,21 +40,20 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // ── Routes ────────────────────────────────────────────────────
-app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/feedback", feedbackRoutes); 
+app.use("/api/v1/auth",     authRoutes);
+app.use("/api/v1/feedback", feedbackRoutes);
+app.use("/api/v1/recipes",  recipeRoutes);  // ← NEW
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// ── Health check routes ───────────────────────────────────────
+// ── Health check ──────────────────────────────────────────────
 app.get("/", (_req: Request, res: Response) => {
   res.json({ success: true, message: "Server is running 🚀" });
 });
 
 app.get("/health", (_req: Request, res: Response) => {
   const dbState: Record<number, string> = {
-    0: "Disconnected ❌",
-    1: "Connected ✅",
-    2: "Connecting... 🔄",
-    3: "Disconnecting... ⚠️",
+    0: "Disconnected ❌", 1: "Connected ✅",
+    2: "Connecting... 🔄", 3: "Disconnecting... ⚠️",
   };
   res.json({
     success: true,
