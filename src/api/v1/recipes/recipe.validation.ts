@@ -13,9 +13,28 @@ const sortEnum         = z.enum(["newest","most_viewed","top_rated"]);
 
 // ── GET /api/v1/recipes ───────────────────────────────────────
 export const listRecipesSchema = z.object({
-  // Accept-Language header is read directly in the controller — not validated
-  // here because validate.middleware only wraps body/query/params.
   query: z.object({
+    time:     z.union([z.array(timeFilterEnum),   timeFilterEnum]).optional(),
+    desire:   z.union([z.array(desireFilterEnum), desireFilterEnum]).optional(),
+    mood:     z.union([z.array(moodFilterEnum),   moodFilterEnum]).optional(),
+    cuisine:  cuisineEnum.optional(),
+    mealType: z.union([z.array(mealTypeEnum), mealTypeEnum]).optional(),
+    dishType: dishTypeEnum.optional(),
+    occasion: z.union([z.array(occasionEnum), occasionEnum]).optional(),
+    health:   z.union([z.array(healthTagEnum), healthTagEnum]).optional(),
+    sort:     sortEnum.optional().default("newest"),
+    page:     z.coerce.number().int().min(1).optional().default(1),
+    limit:    z.coerce.number().int().min(1).max(50).optional().default(12),
+  }),
+});
+
+// ── GET /api/v1/recipes/search ────────────────────────────────
+// q        — free-text (English or Arabic), min 1 char, max 100 chars
+// All filter params are identical to listRecipes so the frontend
+// can keep the same filter panel open while searching.
+export const searchRecipesSchema = z.object({
+  query: z.object({
+    q:        z.string().min(1).max(100),
     time:     z.union([z.array(timeFilterEnum),   timeFilterEnum]).optional(),
     desire:   z.union([z.array(desireFilterEnum), desireFilterEnum]).optional(),
     mood:     z.union([z.array(moodFilterEnum),   moodFilterEnum]).optional(),
@@ -32,6 +51,15 @@ export const listRecipesSchema = z.object({
 
 // ── GET /api/v1/recipes/:id ───────────────────────────────────
 export const getRecipeByIdSchema = z.object({
+  params: z.object({
+    id: z.string().min(1, "Recipe ID is required"),
+  }),
+});
+
+// ── POST /api/v1/recipes/:id/view ────────────────────────────
+// No body — viewer identity is derived from the request itself
+// (auth token for registered users, IP+UA hash for guests).
+export const recordViewSchema = z.object({
   params: z.object({
     id: z.string().min(1, "Recipe ID is required"),
   }),

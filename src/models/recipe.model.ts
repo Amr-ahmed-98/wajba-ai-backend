@@ -190,4 +190,27 @@ recipeSchema.index({ views: -1 });
 recipeSchema.index({ averageRating: -1 });
 recipeSchema.index({ generationBatch: -1 });
 
+// ── Full-text search index (bilingual) ────────────────────────
+// Covers title and description in both English and Arabic so a
+// single $text query matches either language transparently.
+// Weight 10 on titles so a title match ranks above a description match.
+recipeSchema.index(
+  {
+    "title.en":       "text",
+    "title.ar":       "text",
+    "description.en": "text",
+    "description.ar": "text",
+  },
+  {
+    name: "recipe_text_search",
+    weights: {
+      "title.en": 10,
+      "title.ar": 10,
+      "description.en": 5,
+      "description.ar": 5,
+    },
+    default_language: "none", // "none" disables stemming so Arabic is indexed as-is
+  }
+);
+
 export default mongoose.model<IRecipe>("Recipe", recipeSchema);

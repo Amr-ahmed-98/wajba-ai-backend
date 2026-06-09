@@ -1,9 +1,24 @@
 import { Router } from "express";
 import validate from "../../../middlewares/validate.middleware.js";
-import { listRecipesSchema, getRecipeByIdSchema } from "./recipe.validation.js";
+import {
+  listRecipesSchema,
+  searchRecipesSchema,
+  getRecipeByIdSchema,
+  recordViewSchema,
+} from "./recipe.validation.js";
 import * as recipeController from "./recipe.controller.js";
 
 const router = Router();
+
+// ─────────────────────────────────────────────────────────────
+// IMPORTANT — Route ordering
+//
+// Express matches routes top-to-bottom. Static path segments
+// (/generate, /generate-debug, /filters, /search) MUST be
+// registered before the dynamic /:id segment, otherwise Express
+// will treat "filters" or "search" as an ID value and call the
+// wrong controller.
+// ─────────────────────────────────────────────────────────────
 
 // ── POST /api/v1/recipes/generate ────────────────────────────
 /**
@@ -49,7 +64,6 @@ router.post("/generate", recipeController.generateRecipes);
  *     description: >
  *       TEMPORARY diagnostic endpoint. Runs the full pipeline (Gemini → Cloudflare AI → Cloudinary → MongoDB)
  *       for a single recipe and returns the result — or the full error message — directly in the HTTP response.
- *       Use this to confirm all env vars and external services are working before triggering the full 30-recipe run.
  *       DELETE once generation is confirmed working.
  *     parameters:
  *       - in: header
@@ -59,34 +73,10 @@ router.post("/generate", recipeController.generateRecipes);
  *     responses:
  *       200:
  *         description: Debug recipe generated and saved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean, example: true }
- *                 message: { type: string }
- *                 data:
- *                   type: object
- *                   properties:
- *                     id:       { type: string }
- *                     titleEn:  { type: string }
- *                     titleAr:  { type: string }
- *                     imageUrl: { type: string }
- *                     badge:    { type: string }
- *       500:
- *         description: Full error details — which step failed and why
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean, example: false }
- *                 message: { type: string }
- *                 missingVars: { type: array, items: { type: string } }
- *                 stack: { type: string }
  *       403:
  *         description: Invalid or missing admin secret
+ *       500:
+ *         description: Full error details
  */
 router.post("/generate-debug", recipeController.generateRecipesDebug);
 
@@ -116,9 +106,9 @@ router.post("/generate-debug", recipeController.generateRecipesDebug);
  *                     smartFilters:
  *                       type: object
  *                       properties:
- *                         time:   { type: array, items: { type: string }, example: [quick_meal, under_20_min, on_budget, saves_time] }
- *                         desire: { type: array, items: { type: string }, example: [savoury, sweet, light, spicy] }
- *                         mood:   { type: array, items: { type: string }, example: [healthy, comfort_food, crispy, full_meal] }
+ *                         time:   { type: array, items: { type: string } }
+ *                         desire: { type: array, items: { type: string } }
+ *                         mood:   { type: array, items: { type: string } }
  *                     basicFilters:
  *                       type: object
  *                       properties:
@@ -129,6 +119,110 @@ router.post("/generate-debug", recipeController.generateRecipesDebug);
  *                         health:   { type: array, items: { type: string } }
  */
 router.get("/filters", recipeController.getFilterOptions);
+
+// ── GET /api/v1/recipes/search ────────────────────────────────
+/**
+ * @swagger
+ * /api/v1/recipes/search:
+ *   get:
+ *     summary: Full-text search recipes (bilingual, with filters)
+ *     tags: [Recipes]
+ *     description: >
+ *       Free-text search across recipe titles and descriptions in both English and Arabic.
+ *       The query string `q` is matched against a compound MongoDB text index — you do NOT
+ *       need to know which language the content is stored in; a single query works for both.
+ *       All filter, sort, and pagination parameters from the list endpoint are supported
+ *       so the frontend can keep the same filter panel open while searching.
+ *       Results are sorted by text relevance score by default; pass `sort` to override.
+ *       Send Accept-Language: ar for Arabic responses, en (or omit) for English.
+ *     parameters:
+ *       - in: header
+ *         name: Accept-Language
+ *         schema: { type: string, enum: [en, ar], default: en }
+ *         description: Language for all text fields in the response
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema: { type: string, minLength: 1, maxLength: 100 }
+ *         description: Search text — works in English or Arabic
+ *         example: "grilled salmon"
+ *       - in: query
+ *         name: time
+ *         schema: { type: string, enum: [quick_meal, under_20_min, on_budget, saves_time] }
+ *       - in: query
+ *         name: desire
+ *         schema: { type: string, enum: [savoury, sweet, light, spicy] }
+ *       - in: query
+ *         name: mood
+ *         schema: { type: string, enum: [healthy, comfort_food, crispy, full_meal] }
+ *       - in: query
+ *         name: cuisine
+ *         schema: { type: string, enum: [italian, egyptian, japanese, mexican, indian, arabic, french, asian] }
+ *       - in: query
+ *         name: mealType
+ *         schema: { type: string, enum: [breakfast, lunch, dinner, snack, dessert] }
+ *       - in: query
+ *         name: dishType
+ *         schema: { type: string, enum: [pasta, seafood, soup, salad, pizza, grill, sandwich, bowl] }
+ *       - in: query
+ *         name: occasion
+ *         schema: { type: string, enum: [quick_meal, family_dinner, romantic_dinner, healthy_meal_prep] }
+ *       - in: query
+ *         name: health
+ *         schema: { type: string, enum: [keto, vegan, high_protein, low_calorie, low_carb, vegetarian, paleo] }
+ *       - in: query
+ *         name: sort
+ *         schema: { type: string, enum: [newest, most_viewed, top_rated], default: newest }
+ *         description: >
+ *           Sort order. When omitted, results are ordered by text relevance score
+ *           (most relevant first). Pass an explicit value to override relevance sorting.
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 12, maximum: 50 }
+ *     responses:
+ *       200:
+ *         description: Search results returned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:          { type: string }
+ *                       title:        { type: string }
+ *                       description:  { type: string }
+ *                       imageUrl:     { type: string }
+ *                       badge:        { type: string }
+ *                       cardTip:      { type: string }
+ *                       nutrition:
+ *                         type: object
+ *                         properties:
+ *                           calories: { type: number }
+ *                           protein:  { type: number }
+ *                       views:         { type: number }
+ *                       averageRating: { type: number }
+ *                       ratingCount:   { type: number }
+ *                       commentCount:  { type: number }
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     total:       { type: number }
+ *                     page:        { type: number }
+ *                     limit:       { type: number }
+ *                     totalPages:  { type: number }
+ *                     hasNextPage: { type: boolean }
+ *       400:
+ *         description: Missing or invalid `q` parameter
+ */
+router.get("/search", validate(searchRecipesSchema), recipeController.searchRecipes);
 
 // ── GET /api/v1/recipes ───────────────────────────────────────
 /**
@@ -183,42 +277,13 @@ router.get("/filters", recipeController.getFilterOptions);
  *     responses:
  *       200:
  *         description: Recipe list returned successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean, example: true }
- *                 data:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       _id:          { type: string }
- *                       title:        { type: string, example: "Grilled Chicken Bowl" }
- *                       description:  { type: string, example: "High-protein bowl with seasonal vegetables" }
- *                       imageUrl:     { type: string }
- *                       badge:        { type: string, example: "high_protein" }
- *                       cardTip:      { type: string, example: "Great for post-workout muscle gain" }
- *                       nutrition:
- *                         type: object
- *                         properties:
- *                           calories: { type: number, example: 420 }
- *                           protein:  { type: number, example: 38 }
- *                       views:         { type: number, example: 142 }
- *                       averageRating: { type: number, example: 4.8 }
- *                       ratingCount:   { type: number, example: 120 }
- *                       commentCount:  { type: number, example: 34 }
- *                 pagination:
- *                   type: object
- *                   properties:
- *                     total:       { type: number, example: 87 }
- *                     page:        { type: number, example: 1 }
- *                     limit:       { type: number, example: 12 }
- *                     totalPages:  { type: number, example: 8 }
- *                     hasNextPage: { type: boolean, example: true }
  */
 router.get("/", validate(listRecipesSchema), recipeController.listRecipes);
+
+// ─────────────────────────────────────────────────────────────
+// Dynamic /:id routes — registered LAST so static segments above
+// are never shadowed by the param wildcard.
+// ─────────────────────────────────────────────────────────────
 
 // ── GET /api/v1/recipes/:id ───────────────────────────────────
 /**
@@ -231,8 +296,8 @@ router.get("/", validate(listRecipesSchema), recipeController.listRecipes);
  *       Public endpoint. Returns the complete recipe for the detail page.
  *       Send Accept-Language: ar for Arabic, Accept-Language: en (or omit) for English.
  *       All text fields are returned as plain strings in the requested language.
- *       View count increments exactly once per unique viewer —
- *       authenticated users tracked by user ID, guests by a hashed IP+UA fingerprint.
+ *       This endpoint is a pure read — it does NOT increment the view counter.
+ *       To register a view call POST /api/v1/recipes/{id}/view separately.
  *     parameters:
  *       - in: header
  *         name: Accept-Language
@@ -279,11 +344,11 @@ router.get("/", validate(listRecipesSchema), recipeController.listRecipes);
  *                     instructions:
  *                       type: array
  *                       items: { type: string }
- *                       example: ["Step 1: Season the salmon...", "Step 2: Heat the pan..."]
+ *                       example: ["Season the salmon...", "Heat the pan..."]
  *                     aiAdvice:
  *                       type: array
  *                       items: { type: string }
- *                       example: ["Add lemon zest for brightness", "Swap rice for cauliflower rice to cut carbs"]
+ *                       example: ["Add lemon zest for brightness"]
  *                     views:         { type: number, example: 284 }
  *                     averageRating: { type: number, example: 4.8 }
  *                     ratingCount:   { type: number, example: 120 }
@@ -292,5 +357,58 @@ router.get("/", validate(listRecipesSchema), recipeController.listRecipes);
  *         description: Recipe not found
  */
 router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById);
+
+// ── POST /api/v1/recipes/:id/view ────────────────────────────
+/**
+ * @swagger
+ * /api/v1/recipes/{id}/view:
+ *   post:
+ *     summary: Register a view for a recipe (deduplicated per viewer)
+ *     tags: [Recipes]
+ *     description: >
+ *       Call this once when a user lands on the recipe detail page.
+ *       The server deduplicates views so the counter never increments
+ *       twice for the same viewer:
+ *
+ *       **Registered users** — identified by their auth token (req.user.id).
+ *       The user ID is stored in the recipe's `viewedBy` array using
+ *       MongoDB $addToSet so the same user can reload the page any number
+ *       of times without double-counting.
+ *
+ *       **Guest users** — identified by a SHA-256 hash of their IP address
+ *       and User-Agent string, truncated to 16 hex characters. No PII is
+ *       stored; the hash cannot be reversed. Guests who clear cookies or
+ *       switch browsers will generate a new key, which counts as a new view
+ *       — this is acceptable and consistent with industry practice.
+ *
+ *       The update is a single atomic `$addToSet` + conditional `$inc`
+ *       operation so concurrent requests from the same viewer are safe
+ *       without application-level locking.
+ *
+ *       Returns the updated view count so the client can update the UI
+ *       immediately without a follow-up GET request.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *         description: MongoDB ObjectId of the recipe
+ *     responses:
+ *       200:
+ *         description: View registered (or silently ignored if already counted)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     views: { type: number, example: 285 }
+ *       404:
+ *         description: Recipe not found
+ */
+router.post("/:id/view", validate(recordViewSchema), recipeController.recordView);
 
 export default router;

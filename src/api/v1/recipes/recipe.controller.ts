@@ -11,8 +11,11 @@ const getLang = (req: Request) =>
 
 // ─────────────────────────────────────────────────────────────
 // Helper — build a deduplication key for the view counter.
-// Auth users  → their user ID
-// Guests      → SHA-256 hash of IP + User-Agent (no PII stored)
+// Auth users  → their user ID          (e.g. "user:abc123")
+// Guests      → SHA-256( IP + UA )     (e.g. "guest:a1b2c3d4e5f6g7h8")
+//
+// The guest key is a 16-char hex prefix — enough to deduplicate
+// casual revisits without storing any PII in the database.
 // ─────────────────────────────────────────────────────────────
 const buildViewerKey = (req: Request): string => {
   const userId = (req as any).user?.id;
@@ -46,14 +49,11 @@ export const generateRecipes = async (
       return;
     }
 
-    // Send 202 first so the HTTP connection doesn't time out.
     res.status(202).json({
       success: true,
       message: "Recipe generation started. Check server logs for progress.",
     });
 
-    // Use setImmediate so the .catch() handler is guaranteed to be attached
-    // before the async work begins — prevents the silent-crash race condition.
     setImmediate(() => {
       recipeService
         .generateWeeklyRecipes()
@@ -74,9 +74,7 @@ export const generateRecipes = async (
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/recipes/generate-debug
 // Admin-only — TEMPORARY endpoint for diagnosing generation issues.
-// Runs the full pipeline for exactly 1 recipe synchronously and
-// returns the result (or full error) directly in the response.
-// DELETE THIS ENDPOINT once generation is confirmed working.
+// DELETE once generation is confirmed working.
 // ─────────────────────────────────────────────────────────────
 export const generateRecipesDebug = async (
   req: Request,
@@ -94,7 +92,6 @@ export const generateRecipesDebug = async (
 
     console.log("🔍 DEBUG: Starting single-recipe synchronous generation test...");
 
-    // Check env vars and surface missing ones immediately in the response
     const requiredVars = [
       "GROQ_API_KEY",
       "CLOUDFLARE_ACCOUNT_ID",
@@ -128,7 +125,6 @@ export const generateRecipesDebug = async (
     });
 
   } catch (err: any) {
-    // Return the full error to the caller — not just a 500 page
     console.error("❌ DEBUG generation failed:", err.message, err.stack);
     res.status(500).json({
       success: false,
@@ -136,6 +132,17 @@ export const generateRecipesDebug = async (
       stack:   process.env.NODE_ENV !== "production" ? err.stack : undefined,
     });
   }
+};
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/v1/recipes/filters
+// Public — returns all valid filter option keys for the UI panel.
+// ─────────────────────────────────────────────────────────────
+export const getFilterOptions = (_req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    data: recipeService.getFilterOptions(),
+  });
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -174,19 +181,71 @@ export const listRecipes = async (
 };
 
 // ─────────────────────────────────────────────────────────────
-// GET /api/v1/recipes/filters
-// Public — returns all valid filter option keys for the UI panel.
+// GET /api/v1/recipes/search
+// Public — full-text search across title + description in both
+// English and Arabic, combined with the same filter set as the
+// list endpoint.
+//
+// Query params:
+//   q        — required, free-text (en or ar), 1–100 chars
+//   + all filter/sort/page/limit params identical to GET /recipes
+//
+// How it works:
+//   MongoDB $text operator runs against the compound text index
+//   defined in recipe.model.ts (title.en, title.ar,
+//   description.en, description.ar, weights 10/5).
+//   When sort=newest|most_viewed|top_rated the text score is
+//   ignored and the explicit sort field is used instead; when no
+//   sort is specified the results are ordered by text score
+//   (most relevant first).
 // ─────────────────────────────────────────────────────────────
-export const getFilterOptions = (_req: Request, res: Response) => {
-  res.status(200).json({
-    success: true,
-    data: recipeService.getFilterOptions(),
-  });
+export const searchRecipes = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const result = await recipeService.searchRecipes({
+      lang:     getLang(req),
+      q:        req.query.q        as string,
+      time:     req.query.time     as string | string[] | undefined,
+      desire:   req.query.desire   as string | string[] | undefined,
+      mood:     req.query.mood     as string | string[] | undefined,
+      cuisine:  req.query.cuisine  as string | undefined,
+      mealType: req.query.mealType as string | string[] | undefined,
+      dishType: req.query.dishType as string | undefined,
+      occasion: req.query.occasion as string | string[] | undefined,
+      health:   req.query.health   as string | string[] | undefined,
+      sort:     req.query.sort     as "newest" | "most_viewed" | "top_rated" | undefined,
+      page:     req.query.page     ? Number(req.query.page)  : undefined,
+      limit:    req.query.limit    ? Number(req.query.limit) : undefined,
+    });
+
+    res.status(200).json({
+      success:    true,
+      data:       result.recipes,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/recipes/:id
-// Public — full recipe detail in the requested language.
+// Public — full recipe detail page in the requested language.
+//
+// FIX: view counting has been REMOVED from this handler.
+// The GET endpoint is now pure read — it returns the recipe
+// exactly as stored without any side-effects. The client must
+// make a separate POST /api/v1/recipes/:id/view call to register
+// a view (see recordView below).
+//
+// Response shape matches the UI screenshot:
+//   title, description, imageUrl, badge, cardTip,
+//   nutrition (calories, protein, carbohydrates, fat),
+//   ingredients[], instructions[], aiAdvice[],
+//   views, averageRating, ratingCount, commentCount
 // ─────────────────────────────────────────────────────────────
 export const getRecipeById = async (
   req: Request,
@@ -196,11 +255,47 @@ export const getRecipeById = async (
   try {
     const recipe = await recipeService.getRecipeById(
       req.params.id as string,
-      buildViewerKey(req),
       getLang(req)
     );
 
     res.status(200).json({ success: true, data: recipe });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/v1/recipes/:id/view
+// Public — registers one view for this recipe from this viewer.
+//
+// Deduplication rules:
+//   • Registered users  → deduplicated by their user ID
+//     (extracted from req.user set by auth middleware)
+//   • Guest users       → deduplicated by SHA-256(IP + User-Agent)
+//     truncated to 16 hex chars — no PII stored in the DB
+//
+// In both cases the viewer key is added to the recipe's
+// `viewedBy` array (select: false — never exposed by the API)
+// using a $addToSet + $inc atomic update so concurrent requests
+// are safe without any application-level locking.
+//
+// Returns the updated view count so the client can reflect it
+// immediately without a second GET request.
+// ─────────────────────────────────────────────────────────────
+export const recordView = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const viewerKey = buildViewerKey(req);
+    const updated   = await recipeService.recordView(req.params.id as string, viewerKey);
+
+    // 404 is thrown inside the service if the recipe doesn't exist
+    res.status(200).json({
+      success: true,
+      data: { views: updated.views },
+    });
   } catch (error) {
     next(error);
   }

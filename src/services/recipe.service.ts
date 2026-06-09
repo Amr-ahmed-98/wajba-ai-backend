@@ -8,8 +8,14 @@ import { HydratedDocument } from "mongoose";
 // ─────────────────────────────────────────────────────────────
 export type Lang = "en" | "ar";
 
-export const parseLang = (header?: string): Lang =>
-  header === "ar" ? "ar" : "en";
+// Parses the full Accept-Language header value (e.g. "ar-EG,ar;q=0.9,en;q=0.8")
+// and returns "ar" if the highest-priority language tag starts with "ar", else "en".
+export const parseLang = (header?: string): Lang => {
+  if (!header) return "en";
+  // Take the first language tag before any comma or semicolon
+  const primary = header.split(",")[0].split(";")[0].trim().toLowerCase();
+  return primary.startsWith("ar") ? "ar" : "en";
+};
 
 // ─────────────────────────────────────────────────────────────
 // Env-var validation — called once at the start of any
@@ -503,26 +509,144 @@ export const listRecipes = async (input: ListRecipesInput) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Get single recipe (full detail) + deduplicated view count
+// Get single recipe (full detail) — pure read, no side-effects.
+// View counting is handled separately by recordView().
 // ─────────────────────────────────────────────────────────────
 export const getRecipeById = async (
-  recipeId:  string,
-  viewerKey: string,
-  lang:      Lang = "en"
+  recipeId: string,
+  lang:     Lang = "en"
 ): Promise<any> => {
-  const recipe = await Recipe.findById(recipeId).select("+viewedBy");
+  const recipe = await Recipe.findById(recipeId).lean();
   if (!recipe) throw new ApiError(404, "Recipe not found.");
+  return flattenLang(recipe, lang);
+};
 
-  if (!recipe.viewedBy.includes(viewerKey)) {
-    recipe.viewedBy.push(viewerKey);
-    recipe.views += 1;
-    await recipe.save();
+// ─────────────────────────────────────────────────────────────
+// Record a deduplicated view for a recipe.
+// Uses a single atomic $addToSet + conditional $inc so concurrent
+// requests from the same viewer are safe without any locking.
+//
+// viewerKey format:
+//   "user:<userId>"   — registered users (from auth middleware)
+//   "guest:<hex16>"   — guests (SHA-256 of IP+UA, first 16 chars)
+// ─────────────────────────────────────────────────────────────
+export const recordView = async (
+  recipeId:  string,
+  viewerKey: string
+): Promise<{ views: number }> => {
+  // $addToSet is a no-op if the key is already present.
+  // We only $inc views when the key was NOT already in viewedBy —
+  // achieved by checking the $addToSet result via the arrayFilters trick:
+  // instead, we do a two-stage atomic approach with findOneAndUpdate.
+  //
+  // Stage: attempt to add the viewer key. If the document was actually
+  // modified (key wasn't there before), also increment views.
+  const before = await Recipe.findOneAndUpdate(
+    { _id: recipeId },
+    { $addToSet: { viewedBy: viewerKey } },
+    { new: false, select: "viewedBy views" }
+  ).select("+viewedBy");
+
+  if (!before) throw new ApiError(404, "Recipe not found.");
+
+  // If the viewer key was NOT already in the array, increment views
+  const alreadyCounted = before.viewedBy.includes(viewerKey);
+  if (!alreadyCounted) {
+    await Recipe.updateOne({ _id: recipeId }, { $inc: { views: 1 } });
   }
 
-  const plain = recipe.toObject() as any;
-  delete plain.viewedBy;
+  // Return the current view count
+  const updated = await Recipe.findById(recipeId).select("views").lean();
+  return { views: (updated as any)?.views ?? before.views + (alreadyCounted ? 0 : 1) };
+};
 
-  return flattenLang(plain, lang);
+// ─────────────────────────────────────────────────────────────
+// Full-text search recipes — bilingual, with the same filter set
+// as listRecipes.  MongoDB $text operator runs against the
+// compound text index defined in recipe.model.ts.
+//
+// Sort behaviour:
+//   • No sort param  → order by text relevance score (best match first)
+//   • sort param set → use explicit sort field; ignore text score
+// ─────────────────────────────────────────────────────────────
+export interface SearchRecipesInput extends ListRecipesInput {
+  q: string;
+}
+
+export const searchRecipes = async (input: SearchRecipesInput) => {
+  const {
+    lang = "en",
+    q,
+    time, desire, mood,
+    cuisine, mealType, dishType, occasion, health,
+    sort,
+    page  = 1,
+    limit = 12,
+  } = input;
+
+  if (!q || q.trim().length === 0) {
+    throw new ApiError(400, "Search query `q` is required.");
+  }
+
+  const filter: Record<string, any> = {
+    $text: { $search: q.trim() },
+  };
+
+  const toArray = (v?: string | string[]) => v ? (Array.isArray(v) ? v : [v]) : undefined;
+
+  const t  = toArray(time);
+  const d  = toArray(desire);
+  const m  = toArray(mood);
+  const ml = toArray(mealType);
+  const o  = toArray(occasion);
+  const h  = toArray(health);
+
+  if (t)        filter.timeFilters   = { $in: t };
+  if (d)        filter.desireFilters = { $in: d };
+  if (m)        filter.moodFilters   = { $in: m };
+  if (cuisine)  filter.cuisine       = cuisine;
+  if (ml)       filter.mealTypes     = { $in: ml };
+  if (dishType) filter.dishType      = dishType;
+  if (o)        filter.occasionTags  = { $in: o };
+  if (h)        filter.healthTags    = { $in: h };
+
+  // When no explicit sort requested, rank by text relevance score.
+  // When an explicit sort is requested, use that field instead.
+  const sortMap: Record<string, Record<string, 1 | -1>> = {
+    newest:      { createdAt: -1 },
+    most_viewed: { views: -1 },
+    top_rated:   { averageRating: -1 },
+  };
+
+  const sortStage: Record<string, any> = sort
+    ? (sortMap[sort] ?? { score: { $meta: "textScore" } })
+    : { score: { $meta: "textScore" } };
+
+  const projection =
+    "title description imageUrl badge cardTip nutrition.calories nutrition.protein views averageRating ratingCount commentCount createdAt";
+
+  const [recipes, total] = await Promise.all([
+    Recipe.find(filter, sort ? {} : { score: { $meta: "textScore" } })
+      .sort(sortStage)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .select(projection)
+      .lean(),
+    Recipe.countDocuments(filter),
+  ]);
+
+  const localised = recipes.map((r) => flattenLang(r, lang));
+
+  return {
+    recipes: localised,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages:  Math.ceil(total / limit),
+      hasNextPage: page < Math.ceil(total / limit),
+    },
+  };
 };
 
 // ─────────────────────────────────────────────────────────────
