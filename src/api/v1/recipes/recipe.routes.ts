@@ -7,6 +7,7 @@ import {
   recordViewSchema,
 } from "./recipe.validation.js";
 import * as recipeController from "./recipe.controller.js";
+import { authenticate } from "../../../middlewares/Auth.middleware.js";
 
 const router = Router();
 
@@ -404,6 +405,6 @@ router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById
  *       404:
  *         description: Recipe not found
  */
-router.post("/:id/view", validate(recordViewSchema), recipeController.recordView);
+router.post("/:id/view", authenticate, validate(recordViewSchema), recipeController.recordView);
 
 export default router;
