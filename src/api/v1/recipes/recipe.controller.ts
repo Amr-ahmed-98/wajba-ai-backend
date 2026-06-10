@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import * as recipeService from "../../../services/recipe.service.js";
 import { parseLang } from "../../../services/recipe.service.js";
-import crypto from "crypto";
 
 // ─────────────────────────────────────────────────────────────
 // Helper — read Accept-Language header and resolve to "en" | "ar"
@@ -9,26 +8,6 @@ import crypto from "crypto";
 const getLang = (req: Request) =>
   parseLang(req.headers["accept-language"] as string | undefined);
 
-// ─────────────────────────────────────────────────────────────
-// Helper — build a deduplication key for the view counter.
-// Auth users  → their user ID          (e.g. "user:abc123")
-// Guests      → SHA-256( IP + UA )     (e.g. "guest:a1b2c3d4e5f6g7h8")
-//
-// The guest key is a 16-char hex prefix — enough to deduplicate
-// casual revisits without storing any PII in the database.
-// ─────────────────────────────────────────────────────────────
-const buildViewerKey = (req: Request): string => {
-  const userId = (req as any).user?.id;
-  if (userId) return `user:${userId}`;
-
-  const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-  const ua = req.headers["user-agent"] ?? "unknown";
-  return `guest:${crypto
-    .createHash("sha256")
-    .update(`${ip}:${ua}`)
-    .digest("hex")
-    .slice(0, 16)}`;
-};
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/recipes/generate
@@ -41,7 +20,7 @@ export const generateRecipes = async (
   next: NextFunction
 ) => {
   try {
-    const secret         = req.headers["x-admin-secret"];
+    const secret = req.headers["x-admin-secret"];
     const expectedSecret = process.env.ADMIN_GENERATION_SECRET;
 
     if (!expectedSecret || secret !== expectedSecret) {
@@ -82,7 +61,7 @@ export const generateRecipesDebug = async (
   next: NextFunction
 ) => {
   try {
-    const secret         = req.headers["x-admin-secret"];
+    const secret = req.headers["x-admin-secret"];
     const expectedSecret = process.env.ADMIN_GENERATION_SECRET;
 
     if (!expectedSecret || secret !== expectedSecret) {
@@ -116,11 +95,11 @@ export const generateRecipesDebug = async (
       success: true,
       message: "Debug recipe generated and saved successfully.",
       data: {
-        id:       recipe._id,
-        titleEn:  recipe.title.en,
-        titleAr:  recipe.title.ar,
+        id: recipe._id,
+        titleEn: recipe.title.en,
+        titleAr: recipe.title.ar,
         imageUrl: recipe.imageUrl,
-        badge:    recipe.badge,
+        badge: recipe.badge,
       },
     });
 
@@ -129,7 +108,7 @@ export const generateRecipesDebug = async (
     res.status(500).json({
       success: false,
       message: err.message,
-      stack:   process.env.NODE_ENV !== "production" ? err.stack : undefined,
+      stack: process.env.NODE_ENV !== "production" ? err.stack : undefined,
     });
   }
 };
@@ -156,23 +135,23 @@ export const listRecipes = async (
 ) => {
   try {
     const result = await recipeService.listRecipes({
-      lang:     getLang(req),
-      time:     req.query.time     as string | string[] | undefined,
-      desire:   req.query.desire   as string | string[] | undefined,
-      mood:     req.query.mood     as string | string[] | undefined,
-      cuisine:  req.query.cuisine  as string | undefined,
+      lang: getLang(req),
+      time: req.query.time as string | string[] | undefined,
+      desire: req.query.desire as string | string[] | undefined,
+      mood: req.query.mood as string | string[] | undefined,
+      cuisine: req.query.cuisine as string | undefined,
       mealType: req.query.mealType as string | string[] | undefined,
       dishType: req.query.dishType as string | undefined,
       occasion: req.query.occasion as string | string[] | undefined,
-      health:   req.query.health   as string | string[] | undefined,
-      sort:     req.query.sort     as "newest" | "most_viewed" | "top_rated" | undefined,
-      page:     req.query.page     ? Number(req.query.page)  : undefined,
-      limit:    req.query.limit    ? Number(req.query.limit) : undefined,
+      health: req.query.health as string | string[] | undefined,
+      sort: req.query.sort as "newest" | "most_viewed" | "top_rated" | undefined,
+      page: req.query.page ? Number(req.query.page) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
     });
 
     res.status(200).json({
-      success:    true,
-      data:       result.recipes,
+      success: true,
+      data: result.recipes,
       pagination: result.pagination,
     });
   } catch (error) {
@@ -206,24 +185,24 @@ export const searchRecipes = async (
 ) => {
   try {
     const result = await recipeService.searchRecipes({
-      lang:     getLang(req),
-      q:        req.query.q        as string,
-      time:     req.query.time     as string | string[] | undefined,
-      desire:   req.query.desire   as string | string[] | undefined,
-      mood:     req.query.mood     as string | string[] | undefined,
-      cuisine:  req.query.cuisine  as string | undefined,
+      lang: getLang(req),
+      q: req.query.q as string,
+      time: req.query.time as string | string[] | undefined,
+      desire: req.query.desire as string | string[] | undefined,
+      mood: req.query.mood as string | string[] | undefined,
+      cuisine: req.query.cuisine as string | undefined,
       mealType: req.query.mealType as string | string[] | undefined,
       dishType: req.query.dishType as string | undefined,
       occasion: req.query.occasion as string | string[] | undefined,
-      health:   req.query.health   as string | string[] | undefined,
-      sort:     req.query.sort     as "newest" | "most_viewed" | "top_rated" | undefined,
-      page:     req.query.page     ? Number(req.query.page)  : undefined,
-      limit:    req.query.limit    ? Number(req.query.limit) : undefined,
+      health: req.query.health as string | string[] | undefined,
+      sort: req.query.sort as "newest" | "most_viewed" | "top_rated" | undefined,
+      page: req.query.page ? Number(req.query.page) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
     });
 
     res.status(200).json({
-      success:    true,
-      data:       result.recipes,
+      success: true,
+      data: result.recipes,
       pagination: result.pagination,
     });
   } catch (error) {
@@ -288,8 +267,16 @@ export const recordView = async (
   next: NextFunction
 ) => {
   try {
-    const viewerKey = buildViewerKey(req);
-    const updated   = await recipeService.recordView(req.params.id as string, viewerKey);
+    // Only registered users can record views.
+    // Guests cannot reach the detail page, so no guest path is needed.
+    const userId = (req as any).user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Authentication required to record a view." });
+      return;
+    }
+
+    const viewerKey = `user:${userId}`;
+    const updated = await recipeService.recordView(req.params.id as string, viewerKey);
 
     // 404 is thrown inside the service if the recipe doesn't exist
     res.status(200).json({

@@ -24,12 +24,12 @@ export const parseLang = (header?: string): Lang => {
 // ─────────────────────────────────────────────────────────────
 const validateEnvVars = (): void => {
   const required: Record<string, string | undefined> = {
-    GROQ_API_KEY:            process.env.GROQ_API_KEY,
-    CLOUDFLARE_ACCOUNT_ID:   process.env.CLOUDFLARE_ACCOUNT_ID,
-    CLOUDFLARE_API_TOKEN:    process.env.CLOUDFLARE_API_TOKEN,
-    CLOUDINARY_CLOUD_NAME:   process.env.CLOUDINARY_CLOUD_NAME,
-    CLOUDINARY_API_KEY:      process.env.CLOUDINARY_API_KEY,
-    CLOUDINARY_API_SECRET:   process.env.CLOUDINARY_API_SECRET,
+    GROQ_API_KEY: process.env.GROQ_API_KEY,
+    CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
   };
 
   const missing = Object.entries(required)
@@ -57,7 +57,7 @@ const configureCloudinary = () => {
   }
   cloudinary.config({
     cloud_name: CLOUDINARY_CLOUD_NAME,
-    api_key:    CLOUDINARY_API_KEY,
+    api_key: CLOUDINARY_API_KEY,
     api_secret: CLOUDINARY_API_SECRET,
   });
   _cloudinaryConfigured = true;
@@ -72,8 +72,8 @@ const uploadImageToCloudinary = (dataUri: string, publicId: string): Promise<str
     cloudinary.uploader.upload(
       dataUri,
       {
-        public_id:      `recipe_images/${publicId}`,
-        resource_type:  "image",
+        public_id: `recipe_images/${publicId}`,
+        resource_type: "image",
         transformation: [{ quality: "auto", fetch_format: "auto" }],
       },
       (error, result) => {
@@ -94,7 +94,7 @@ const uploadImageToCloudinary = (dataUri: string, publicId: string): Promise<str
 // ─────────────────────────────────────────────────────────────
 const generateRecipeImage = async (prompt: string): Promise<string> => {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const apiToken  = process.env.CLOUDFLARE_API_TOKEN;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) throw new ApiError(500, "Image generation service is not configured.");
 
   console.log(`    🎨 Calling Cloudflare AI for image...`);
@@ -118,31 +118,31 @@ const generateRecipeImage = async (prompt: string): Promise<string> => {
   // Detect if it accidentally returned JSON (error payload) vs actual image data.
   const contentType = response.headers.get("content-type") ?? "";
 
-if (contentType.includes("application/json")) {
-  const body: any = await response.json().catch(() => ({}));
+  if (contentType.includes("application/json")) {
+    const body: any = await response.json().catch(() => ({}));
 
-  // Cloudflare Workers AI returns { result: { image: "<base64>" }, success: true }
-  const base64Image = body?.result?.image;
-  if (body?.success && typeof base64Image === "string" && base64Image.length > 0) {
-    console.log(`    ✅ Cloudflare image generated (base64 JSON response)`);
-    // The base64 string may be JPEG or PNG — detect from the data
-    const mimeType = base64Image.startsWith("/9j/") ? "image/jpeg" : "image/png";
-    return `data:${mimeType};base64,${base64Image}`;
+    // Cloudflare Workers AI returns { result: { image: "<base64>" }, success: true }
+    const base64Image = body?.result?.image;
+    if (body?.success && typeof base64Image === "string" && base64Image.length > 0) {
+      console.log(`    ✅ Cloudflare image generated (base64 JSON response)`);
+      // The base64 string may be JPEG or PNG — detect from the data
+      const mimeType = base64Image.startsWith("/9j/") ? "image/jpeg" : "image/png";
+      return `data:${mimeType};base64,${base64Image}`;
+    }
+
+    // It's JSON but not a successful image response — it's a real error
+    console.error(`    ❌ Cloudflare AI returned JSON error:`, JSON.stringify(body));
+    throw new ApiError(502, `Cloudflare AI returned an error payload: ${JSON.stringify(body)}`);
   }
 
-  // It's JSON but not a successful image response — it's a real error
-  console.error(`    ❌ Cloudflare AI returned JSON error:`, JSON.stringify(body));
-  throw new ApiError(502, `Cloudflare AI returned an error payload: ${JSON.stringify(body)}`);
-}
-
-// Raw binary response path (fallback)
-const buffer = await response.arrayBuffer();
-if (!buffer || buffer.byteLength === 0) {
-  throw new ApiError(502, "Cloudflare AI returned an empty image buffer.");
-}
-console.log(`    ✅ Cloudflare image generated (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
-const base64 = Buffer.from(buffer).toString("base64");
-return `data:image/png;base64,${base64}`;
+  // Raw binary response path (fallback)
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength === 0) {
+    throw new ApiError(502, "Cloudflare AI returned an empty image buffer.");
+  }
+  console.log(`    ✅ Cloudflare image generated (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
+  const base64 = Buffer.from(buffer).toString("base64");
+  return `data:image/png;base64,${base64}`;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -152,8 +152,8 @@ return `data:image/png;base64,${base64}`;
 // API is OpenAI-compatible (same request/response shape).
 // ─────────────────────────────────────────────────────────────
 const generateRecipeWithGroq = async (
-  recipeIndex:    number,
-  batchNumber:    number,
+  recipeIndex: number,
+  batchNumber: number,
   existingTitles: string[]
 ): Promise<any> => {
   const groqApiKey = process.env.GROQ_API_KEY;
@@ -221,15 +221,15 @@ CRITICAL FILTER RULES — violating these will break the database schema:
     method: "POST",
     headers: {
       "Authorization": `Bearer ${groqApiKey}`,
-      "Content-Type":  "application/json",
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model:       "llama-3.3-70b-versatile",
+      model: "llama-3.3-70b-versatile",
       temperature: 0.9,
-      max_tokens:  3000,
+      max_tokens: 3000,
       messages: [
         {
-          role:    "user",
+          role: "user",
           content: prompt,
         },
       ],
@@ -275,15 +275,15 @@ CRITICAL FILTER RULES — violating these will break the database schema:
 // Must stay in sync with recipe.model.ts and recipe.validation.ts.
 // ─────────────────────────────────────────────────────────────
 const VALID_ENUMS = {
-  timeFilters:   new Set(["quick_meal","under_20_min","on_budget","saves_time"]),
-  desireFilters: new Set(["savoury","sweet","light","spicy"]),
-  moodFilters:   new Set(["healthy","comfort_food","crispy","full_meal"]),
-  cuisine:       new Set(["italian","egyptian","japanese","mexican","indian","arabic","french","asian"]),
-  mealTypes:     new Set(["breakfast","lunch","dinner","snack","dessert"]),
-  dishType:      new Set(["pasta","seafood","soup","salad","pizza","grill","sandwich","bowl"]),
-  occasionTags:  new Set(["quick_meal","family_dinner","romantic_dinner","healthy_meal_prep"]),
-  healthTags:    new Set(["keto","vegan","high_protein","low_calorie","low_carb","vegetarian","paleo"]),
-  badge:         new Set(["keto","vegan","high_protein","low_calorie","low_carb","muscle_gain","premium"]),
+  timeFilters: new Set(["quick_meal", "under_20_min", "on_budget", "saves_time"]),
+  desireFilters: new Set(["savoury", "sweet", "light", "spicy"]),
+  moodFilters: new Set(["healthy", "comfort_food", "crispy", "full_meal"]),
+  cuisine: new Set(["italian", "egyptian", "japanese", "mexican", "indian", "arabic", "french", "asian"]),
+  mealTypes: new Set(["breakfast", "lunch", "dinner", "snack", "dessert"]),
+  dishType: new Set(["pasta", "seafood", "soup", "salad", "pizza", "grill", "sandwich", "bowl"]),
+  occasionTags: new Set(["quick_meal", "family_dinner", "romantic_dinner", "healthy_meal_prep"]),
+  healthTags: new Set(["keto", "vegan", "high_protein", "low_calorie", "low_carb", "vegetarian", "paleo"]),
+  badge: new Set(["keto", "vegan", "high_protein", "low_calorie", "low_carb", "muscle_gain", "premium"]),
 } as const;
 
 // ─────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ const VALID_ENUMS = {
 const sanitizeRecipeFilters = (data: any, recipeIndex: number): any => {
   const sanitizeArray = (field: string, values: any, validSet: Set<string>): string[] => {
     if (!Array.isArray(values)) return [];
-    const valid   = values.filter((v: any) => typeof v === "string" && validSet.has(v));
+    const valid = values.filter((v: any) => typeof v === "string" && validSet.has(v));
     const removed = values.filter((v: any) => !validSet.has(v));
     if (removed.length) {
       console.warn(
@@ -316,15 +316,15 @@ const sanitizeRecipeFilters = (data: any, recipeIndex: number): any => {
 
   return {
     ...data,
-    timeFilters:   sanitizeArray ("timeFilters",   data.timeFilters,   VALID_ENUMS.timeFilters),
-    desireFilters: sanitizeArray ("desireFilters",  data.desireFilters, VALID_ENUMS.desireFilters),
-    moodFilters:   sanitizeArray ("moodFilters",    data.moodFilters,   VALID_ENUMS.moodFilters),
-    mealTypes:     sanitizeArray ("mealTypes",      data.mealTypes,     VALID_ENUMS.mealTypes),
-    occasionTags:  sanitizeArray ("occasionTags",   data.occasionTags,  VALID_ENUMS.occasionTags),
-    healthTags:    sanitizeArray ("healthTags",     data.healthTags,    VALID_ENUMS.healthTags),
-    cuisine:       sanitizeScalar("cuisine",        data.cuisine,       VALID_ENUMS.cuisine,  "italian"),
-    dishType:      sanitizeScalar("dishType",       data.dishType,      VALID_ENUMS.dishType,  "bowl"),
-    badge:         sanitizeScalar("badge",          data.badge,         VALID_ENUMS.badge,     "premium"),
+    timeFilters: sanitizeArray("timeFilters", data.timeFilters, VALID_ENUMS.timeFilters),
+    desireFilters: sanitizeArray("desireFilters", data.desireFilters, VALID_ENUMS.desireFilters),
+    moodFilters: sanitizeArray("moodFilters", data.moodFilters, VALID_ENUMS.moodFilters),
+    mealTypes: sanitizeArray("mealTypes", data.mealTypes, VALID_ENUMS.mealTypes),
+    occasionTags: sanitizeArray("occasionTags", data.occasionTags, VALID_ENUMS.occasionTags),
+    healthTags: sanitizeArray("healthTags", data.healthTags, VALID_ENUMS.healthTags),
+    cuisine: sanitizeScalar("cuisine", data.cuisine, VALID_ENUMS.cuisine, "italian"),
+    dishType: sanitizeScalar("dishType", data.dishType, VALID_ENUMS.dishType, "bowl"),
+    badge: sanitizeScalar("badge", data.badge, VALID_ENUMS.badge, "premium"),
   };
 };
 
@@ -333,8 +333,8 @@ const sanitizeRecipeFilters = (data: any, recipeIndex: number): any => {
 // loop and the debug endpoint (which calls it once).
 // ─────────────────────────────────────────────────────────────
 export const generateSingleRecipe = async (
-  recipeIndex:    number,
-  batchNumber:    number,
+  recipeIndex: number,
+  batchNumber: number,
   existingTitles: string[]
 ): Promise<HydratedDocument<IRecipe>> => {
   // Step 1 — Groq
@@ -354,7 +354,7 @@ export const generateSingleRecipe = async (
   const imageDataUri = await generateRecipeImage(imagePrompt);
 
   // Step 3 — Cloudinary upload
-  const slug     = (recipeData.title?.en ?? `recipe-${recipeIndex}`)
+  const slug = (recipeData.title?.en ?? `recipe-${recipeIndex}`)
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
   const publicId = `batch-${batchNumber}-${recipeIndex + 1}-${slug}`;
   console.log(`    ☁️  Uploading to Cloudinary as: recipe_images/${publicId}`);
@@ -375,11 +375,11 @@ export const generateWeeklyRecipes = async (): Promise<{ created: number; errors
   // Validate all env vars upfront — throws immediately if anything is missing
   validateEnvVars();
 
-  const lastRecipe  = await Recipe.findOne().sort({ generationBatch: -1 }).select("generationBatch");
+  const lastRecipe = await Recipe.findOne().sort({ generationBatch: -1 }).select("generationBatch");
   const batchNumber = (lastRecipe?.generationBatch ?? 0) + 1;
 
-  const errors:         string[] = [];
-  const created:        HydratedDocument<IRecipe>[] = [];
+  const errors: string[] = [];
+  const created: HydratedDocument<IRecipe>[] = [];
   const existingTitles: string[] = [];
 
   console.log(`🍳 Starting bilingual recipe generation — batch #${batchNumber}`);
@@ -419,12 +419,12 @@ const flattenLang = (recipe: any, lang: Lang): any => {
 
   return {
     ...recipe,
-    title:        pick(recipe.title),
-    description:  pick(recipe.description),
-    cardTip:      pick(recipe.cardTip),
+    title: pick(recipe.title),
+    description: pick(recipe.description),
+    cardTip: pick(recipe.cardTip),
     instructions: recipe.instructions?.[lang] ?? recipe.instructions?.en ?? [],
-    aiAdvice:     recipe.aiAdvice?.[lang]     ?? recipe.aiAdvice?.en     ?? [],
-    ingredients:  (recipe.ingredients ?? []).map((ing: any) => ({
+    aiAdvice: recipe.aiAdvice?.[lang] ?? recipe.aiAdvice?.en ?? [],
+    ingredients: (recipe.ingredients ?? []).map((ing: any) => ({
       ...ing,
       name: pick(ing.name),
     })),
@@ -435,18 +435,18 @@ const flattenLang = (recipe: any, lang: Lang): any => {
 // List recipes with filters + pagination
 // ─────────────────────────────────────────────────────────────
 export interface ListRecipesInput {
-  lang?:     Lang;
-  time?:     string | string[];
-  desire?:   string | string[];
-  mood?:     string | string[];
-  cuisine?:  string;
+  lang?: Lang;
+  time?: string | string[];
+  desire?: string | string[];
+  mood?: string | string[];
+  cuisine?: string;
   mealType?: string | string[];
   dishType?: string;
   occasion?: string | string[];
-  health?:   string | string[];
-  sort?:     "newest" | "most_viewed" | "top_rated";
-  page?:     number;
-  limit?:    number;
+  health?: string | string[];
+  sort?: "newest" | "most_viewed" | "top_rated";
+  page?: number;
+  limit?: number;
 }
 
 export const listRecipes = async (input: ListRecipesInput) => {
@@ -454,34 +454,34 @@ export const listRecipes = async (input: ListRecipesInput) => {
     lang = "en",
     time, desire, mood,
     cuisine, mealType, dishType, occasion, health,
-    sort  = "newest",
-    page  = 1,
+    sort = "newest",
+    page = 1,
     limit = 12,
   } = input;
 
   const filter: Record<string, any> = {};
   const toArray = (v?: string | string[]) => v ? (Array.isArray(v) ? v : [v]) : undefined;
 
-  const t  = toArray(time);
-  const d  = toArray(desire);
-  const m  = toArray(mood);
+  const t = toArray(time);
+  const d = toArray(desire);
+  const m = toArray(mood);
   const ml = toArray(mealType);
-  const o  = toArray(occasion);
-  const h  = toArray(health);
+  const o = toArray(occasion);
+  const h = toArray(health);
 
-  if (t)       filter.timeFilters   = { $in: t };
-  if (d)       filter.desireFilters = { $in: d };
-  if (m)       filter.moodFilters   = { $in: m };
-  if (cuisine) filter.cuisine       = cuisine;
-  if (ml)      filter.mealTypes     = { $in: ml };
-  if (dishType)filter.dishType      = dishType;
-  if (o)       filter.occasionTags  = { $in: o };
-  if (h)       filter.healthTags    = { $in: h };
+  if (t) filter.timeFilters = { $in: t };
+  if (d) filter.desireFilters = { $in: d };
+  if (m) filter.moodFilters = { $in: m };
+  if (cuisine) filter.cuisine = cuisine;
+  if (ml) filter.mealTypes = { $in: ml };
+  if (dishType) filter.dishType = dishType;
+  if (o) filter.occasionTags = { $in: o };
+  if (h) filter.healthTags = { $in: h };
 
   const sortMap: Record<string, Record<string, 1 | -1>> = {
-    newest:      { createdAt: -1 },
+    newest: { createdAt: -1 },
     most_viewed: { views: -1 },
-    top_rated:   { averageRating: -1 },
+    top_rated: { averageRating: -1 },
   };
 
   const [recipes, total] = await Promise.all([
@@ -502,7 +502,7 @@ export const listRecipes = async (input: ListRecipesInput) => {
       total,
       page,
       limit,
-      totalPages:  Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit),
       hasNextPage: page < Math.ceil(total / limit),
     },
   };
@@ -514,7 +514,7 @@ export const listRecipes = async (input: ListRecipesInput) => {
 // ─────────────────────────────────────────────────────────────
 export const getRecipeById = async (
   recipeId: string,
-  lang:     Lang = "en"
+  lang: Lang = "en"
 ): Promise<any> => {
   const recipe = await Recipe.findById(recipeId).lean();
   if (!recipe) throw new ApiError(404, "Recipe not found.");
@@ -531,33 +531,41 @@ export const getRecipeById = async (
 //   "guest:<hex16>"   — guests (SHA-256 of IP+UA, first 16 chars)
 // ─────────────────────────────────────────────────────────────
 export const recordView = async (
-  recipeId:  string,
+  recipeId: string,
   viewerKey: string
 ): Promise<{ views: number }> => {
-  // $addToSet is a no-op if the key is already present.
-  // We only $inc views when the key was NOT already in viewedBy —
-  // achieved by checking the $addToSet result via the arrayFilters trick:
-  // instead, we do a two-stage atomic approach with findOneAndUpdate.
+  // Single atomic operation:
+  //   - Filter: document exists AND viewerKey is NOT already in viewedBy
+  //   - Update: add the key + increment views in one round-trip
+  //   - new: true  → returns the document AFTER the update
   //
-  // Stage: attempt to add the viewer key. If the document was actually
-  // modified (key wasn't there before), also increment views.
-  const before = await Recipe.findOneAndUpdate(
-    { _id: recipeId },
-    { $addToSet: { viewedBy: viewerKey } },
-    { new: false, select: "viewedBy views" }
-  ).select("+viewedBy");
+  // If the viewer already counted, the filter won't match so
+  // findOneAndUpdate returns null — we then fetch the current
+  // view count with a plain findById (read-only, no write).
+  const updated = await Recipe.findOneAndUpdate(
+    {
+      _id: recipeId,
+      viewedBy: { $not: { $elemMatch: { $eq: viewerKey } } },
+    },
+    {
+      $addToSet: { viewedBy: viewerKey },
+      $inc: { views: 1 },
+    },
+    { new: true, select: "views" }
+  );
 
-  if (!before) throw new ApiError(404, "Recipe not found.");
-
-  // If the viewer key was NOT already in the array, increment views
-  const alreadyCounted = before.viewedBy.includes(viewerKey);
-  if (!alreadyCounted) {
-    await Recipe.updateOne({ _id: recipeId }, { $inc: { views: 1 } });
+  if (updated) {
+    // First-time view — return the freshly incremented count.
+    return { views: updated.views };
   }
 
-  // Return the current view count
-  const updated = await Recipe.findById(recipeId).select("views").lean();
-  return { views: (updated as any)?.views ?? before.views + (alreadyCounted ? 0 : 1) };
+  // Either the recipe doesn't exist OR the viewer already counted.
+  // Distinguish the two cases with a lightweight existence check.
+  const existing = await Recipe.findById(recipeId).select("views").lean();
+  if (!existing) throw new ApiError(404, "Recipe not found.");
+
+  // Already counted — return the unchanged view count.
+  return { views: (existing as any).views };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -580,7 +588,7 @@ export const searchRecipes = async (input: SearchRecipesInput) => {
     time, desire, mood,
     cuisine, mealType, dishType, occasion, health,
     sort,
-    page  = 1,
+    page = 1,
     limit = 12,
   } = input;
 
@@ -594,28 +602,28 @@ export const searchRecipes = async (input: SearchRecipesInput) => {
 
   const toArray = (v?: string | string[]) => v ? (Array.isArray(v) ? v : [v]) : undefined;
 
-  const t  = toArray(time);
-  const d  = toArray(desire);
-  const m  = toArray(mood);
+  const t = toArray(time);
+  const d = toArray(desire);
+  const m = toArray(mood);
   const ml = toArray(mealType);
-  const o  = toArray(occasion);
-  const h  = toArray(health);
+  const o = toArray(occasion);
+  const h = toArray(health);
 
-  if (t)        filter.timeFilters   = { $in: t };
-  if (d)        filter.desireFilters = { $in: d };
-  if (m)        filter.moodFilters   = { $in: m };
-  if (cuisine)  filter.cuisine       = cuisine;
-  if (ml)       filter.mealTypes     = { $in: ml };
-  if (dishType) filter.dishType      = dishType;
-  if (o)        filter.occasionTags  = { $in: o };
-  if (h)        filter.healthTags    = { $in: h };
+  if (t) filter.timeFilters = { $in: t };
+  if (d) filter.desireFilters = { $in: d };
+  if (m) filter.moodFilters = { $in: m };
+  if (cuisine) filter.cuisine = cuisine;
+  if (ml) filter.mealTypes = { $in: ml };
+  if (dishType) filter.dishType = dishType;
+  if (o) filter.occasionTags = { $in: o };
+  if (h) filter.healthTags = { $in: h };
 
   // When no explicit sort requested, rank by text relevance score.
   // When an explicit sort is requested, use that field instead.
   const sortMap: Record<string, Record<string, 1 | -1>> = {
-    newest:      { createdAt: -1 },
+    newest: { createdAt: -1 },
     most_viewed: { views: -1 },
-    top_rated:   { averageRating: -1 },
+    top_rated: { averageRating: -1 },
   };
 
   const sortStage: Record<string, any> = sort
@@ -643,7 +651,7 @@ export const searchRecipes = async (input: SearchRecipesInput) => {
       total,
       page,
       limit,
-      totalPages:  Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit),
       hasNextPage: page < Math.ceil(total / limit),
     },
   };
@@ -654,15 +662,15 @@ export const searchRecipes = async (input: SearchRecipesInput) => {
 // ─────────────────────────────────────────────────────────────
 export const getFilterOptions = () => ({
   smartFilters: {
-    time:   ["quick_meal","under_20_min","on_budget","saves_time"],
-    desire: ["savoury","sweet","light","spicy"],
-    mood:   ["healthy","comfort_food","crispy","full_meal"],
+    time: ["quick_meal", "under_20_min", "on_budget", "saves_time"],
+    desire: ["savoury", "sweet", "light", "spicy"],
+    mood: ["healthy", "comfort_food", "crispy", "full_meal"],
   },
   basicFilters: {
-    cuisine:  ["italian","egyptian","japanese","mexican","indian","arabic","french","asian"],
-    mealType: ["breakfast","lunch","dinner","snack","dessert"],
-    dishType: ["pasta","seafood","soup","salad","pizza","grill","sandwich","bowl"],
-    occasion: ["quick_meal","family_dinner","romantic_dinner","healthy_meal_prep"],
-    health:   ["keto","vegan","high_protein","low_calorie","low_carb","vegetarian","paleo"],
+    cuisine: ["italian", "egyptian", "japanese", "mexican", "indian", "arabic", "french", "asian"],
+    mealType: ["breakfast", "lunch", "dinner", "snack", "dessert"],
+    dishType: ["pasta", "seafood", "soup", "salad", "pizza", "grill", "sandwich", "bowl"],
+    occasion: ["quick_meal", "family_dinner", "romantic_dinner", "healthy_meal_prep"],
+    health: ["keto", "vegan", "high_protein", "low_calorie", "low_carb", "vegetarian", "paleo"],
   },
 });

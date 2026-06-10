@@ -363,30 +363,23 @@ router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById
  * @swagger
  * /api/v1/recipes/{id}/view:
  *   post:
- *     summary: Register a view for a recipe (deduplicated per viewer)
+ *     summary: Register a view for a recipe (registered users only, deduplicated)
  *     tags: [Recipes]
  *     description: >
- *       Call this once when a user lands on the recipe detail page.
+ *       Call this once when a registered user lands on the recipe detail page.
+ *       Requires authentication — unauthenticated / guest requests return 401.
+ *
  *       The server deduplicates views so the counter never increments
- *       twice for the same viewer:
- *
- *       **Registered users** — identified by their auth token (req.user.id).
- *       The user ID is stored in the recipe's `viewedBy` array using
- *       MongoDB $addToSet so the same user can reload the page any number
- *       of times without double-counting.
- *
- *       **Guest users** — identified by a SHA-256 hash of their IP address
- *       and User-Agent string, truncated to 16 hex characters. No PII is
- *       stored; the hash cannot be reversed. Guests who clear cookies or
- *       switch browsers will generate a new key, which counts as a new view
- *       — this is acceptable and consistent with industry practice.
- *
- *       The update is a single atomic `$addToSet` + conditional `$inc`
- *       operation so concurrent requests from the same viewer are safe
- *       without application-level locking.
+ *       twice for the same user: the user ID is stored in the recipe's
+ *       `viewedBy` array via a single atomic `$addToSet` + `$inc` operation
+ *       that only fires when the key is not already present. Reloading the
+ *       page any number of times will never double-count, and concurrent
+ *       requests are safe without application-level locking.
  *
  *       Returns the updated view count so the client can update the UI
  *       immediately without a follow-up GET request.
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -406,6 +399,8 @@ router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById
  *                   type: object
  *                   properties:
  *                     views: { type: number, example: 285 }
+ *       401:
+ *         description: Authentication required
  *       404:
  *         description: Recipe not found
  */
