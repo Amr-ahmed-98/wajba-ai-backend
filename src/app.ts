@@ -4,9 +4,10 @@ import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
 import cors from "cors";
-import authRoutes    from "./api/v1/auth/auth.routes.js";
+import authRoutes from "./api/v1/auth/auth.routes.js";
 import feedbackRoutes from "./api/v1/feedback/feedback.routes.js";
-import recipeRoutes  from "./api/v1/recipes/recipe.routes.js"; // ← NEW
+import recipeRoutes from "./api/v1/recipes/recipe.routes.js";
+import bookmarkRoutes from "./api/v1/bookmark/bookmark.routes.js";
 import { errorHandler } from "./middlewares/Errorhandler.middleware.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swager.js";
@@ -40,9 +41,10 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // ── Routes ────────────────────────────────────────────────────
-app.use("/api/v1/auth",     authRoutes);
+app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/feedback", feedbackRoutes);
-app.use("/api/v1/recipes",  recipeRoutes);  // ← NEW
+app.use("/api/v1/recipes", recipeRoutes);
+app.use("/api/v1/bookmarks", bookmarkRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── Health check ──────────────────────────────────────────────

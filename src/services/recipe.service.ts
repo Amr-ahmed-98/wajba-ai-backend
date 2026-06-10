@@ -413,7 +413,7 @@ export const generateWeeklyRecipes = async (): Promise<{ created: number; errors
 // ─────────────────────────────────────────────────────────────
 // Flatten localised fields — called before sending to client
 // ─────────────────────────────────────────────────────────────
-const flattenLang = (recipe: any, lang: Lang): any => {
+export const flattenLang = (recipe: any, lang: Lang): any => {
   const pick = (field: { en: string; ar: string } | undefined) =>
     field ? field[lang] ?? field.en : "";
 

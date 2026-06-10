@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, Document, Types } from "mongoose";
 
 export interface IUser extends Document {
   name: string;
@@ -13,6 +13,7 @@ export interface IUser extends Document {
   familyType: string;
   primaryCookingGoal: string;
   availableKitchenTools: string[];
+  bookmarks: Types.ObjectId[]; // Recipe IDs saved by this user
   otp?: string;
   otpExpires?: Date;
   refreshToken?: string;
@@ -36,6 +37,10 @@ const UserSchema = new Schema<IUser>(
     familyType: { type: String, enum: ["Single person", "Couple", "Large family"] },
     primaryCookingGoal: { type: String, enum: ["Save time", "Healthy and nutritious eating", "Learn new skills", "Save money"] },
     availableKitchenTools: [{ type: String, enum: ["Oven", "Air fryer", "Blender", "Pressure cooker", "Coffee maker", "Toaster", "Slow cooker", "Other"] }],
+    bookmarks: {
+      type: [{ type: Schema.Types.ObjectId, ref: "Recipe" }],
+      default: [],
+    },
     otp: { type: String, select: false },
     otpExpires: { type: Date, select: false },
     refreshToken: { type: String, select: false },
