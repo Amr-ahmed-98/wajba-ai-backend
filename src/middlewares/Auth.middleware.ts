@@ -36,7 +36,7 @@ export const authenticate = (
 
         const token = authHeader.split(" ")[1];
 
-        const secret = process.env.JWT_SECRET;
+        const secret = process.env.JWT_ACCESS_SECRET;
         if (!secret) {
             throw new ApiError(500, "Server misconfiguration: JWT_SECRET is not set.");
         }
