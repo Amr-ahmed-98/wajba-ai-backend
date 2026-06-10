@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import * as bookmarkService from "../../../services/bookmark.service.js";
 import { parseLang } from "../../../services/recipe.service.js";
+import { ApiError } from "../../../utils/Apierror.js";
 
 // ─────────────────────────────────────────────────────────────
 // Helper — same language resolution used by recipe endpoints
@@ -30,6 +31,13 @@ export const addBookmark = async (
             data: result,
         });
     } catch (error) {
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+            });
+            return;
+        }
         next(error);
     }
 };
@@ -56,6 +64,13 @@ export const removeBookmark = async (
             data: result,
         });
     } catch (error) {
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+            });
+            return;
+        }
         next(error);
     }
 };
@@ -86,10 +101,18 @@ export const getBookmarks = async (
 
         res.status(200).json({
             success: true,
+            message: "Bookmarks retrieved successfully.",
             data: result.recipes,
             pagination: result.pagination,
         });
     } catch (error) {
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+            });
+            return;
+        }
         next(error);
     }
 };
