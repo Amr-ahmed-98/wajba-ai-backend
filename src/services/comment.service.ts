@@ -162,17 +162,21 @@ export const deleteComment = async (
 
     await comment.deleteOne();
 
-    // FIX: use $max to prevent commentCount from going below 0 if the
-    // counter and the collection ever drift out of sync (e.g. manual DB ops,
-    // migration bugs). Without this guard a negative counter would persist
-    // forever and corrupt the recipe's displayed stats.
-    await Recipe.findByIdAndUpdate(recipeId, [
-        {
-            $set: {
-                commentCount: { $max: [0, { $subtract: ["$commentCount", 1] }] },
-            },
-        },
-    ]);
+    // FIX: decrement with $inc, then clamp to 0 in a second query if needed.
+    // (Previously used the aggregation-pipeline update form — `update` as an
+    // array — which requires MongoDB 4.2+. On servers/drivers that don't
+    // support it, Mongo throws here AFTER comment.deleteOne() already
+    // succeeded, so the comment was really deleted but the request still
+    // came back as a 500. This two-step $inc + clamp form works on every
+    // MongoDB version and gives the same "never below 0" guarantee.)
+    const updated = await Recipe.findByIdAndUpdate(
+        recipeId,
+        { $inc: { commentCount: -1 } },
+        { new: true }
+    );
+    if (updated && updated.commentCount < 0) {
+        await Recipe.findByIdAndUpdate(recipeId, { commentCount: 0 });
+    }
 };
 
 // ─────────────────────────────────────────────────────────────
