@@ -111,28 +111,65 @@ export const addComment = async (
 // author's name and photo (null until the profile-photo feature lands).
 // likedBy / dislikedBy are excluded; only the integer counts are visible.
 // ─────────────────────────────────────────────────────────────
+// export const getComments = async (
+//     recipeId: string,
+//     page = 1,
+//     limit = 10
+// ): Promise<{ comments: IComment[]; pagination: PaginationMeta }> => {
+//     await assertRecipeExists(recipeId);
+
+//     const skip = (page - 1) * limit;
+//     const total = await Comment.countDocuments({ recipe: recipeId });
+
+//     // likedBy / dislikedBy are already select:false at schema level so they
+//     // are never returned. The explicit negation below is a belt-and-suspenders
+//     // guard in case schema defaults are ever changed, and also covers the
+//     // reply sub-document arrays which are only select:false within their schema.
+//     const comments = await Comment
+//         .find({ recipe: recipeId })
+//         .select("-likedBy -dislikedBy -replies.likedBy -replies.dislikedBy")
+//         .sort({ createdAt: -1 })
+//         .skip(skip)
+//         .limit(limit)
+//         .lean();
+
+//     return {
+//         comments: comments as unknown as IComment[],
+//         pagination: {
+//             total,
+//             page,
+//             limit,
+//             totalPages: Math.ceil(total / limit),
+//             hasNextPage: skip + comments.length < total,
+//         },
+//     };
+// };
+
 export const getComments = async (
     recipeId: string,
     page = 1,
     limit = 10
 ): Promise<{ comments: IComment[]; pagination: PaginationMeta }> => {
     await assertRecipeExists(recipeId);
-
     const skip = (page - 1) * limit;
     const total = await Comment.countDocuments({ recipe: recipeId });
-
-    // likedBy / dislikedBy are already select:false at schema level so they
-    // are never returned. The explicit negation below is a belt-and-suspenders
-    // guard in case schema defaults are ever changed, and also covers the
-    // reply sub-document arrays which are only select:false within their schema.
     const comments = await Comment
         .find({ recipe: recipeId })
+        .populate([
+            {
+                path: "author",
+                select: "name photo" // Fetches the latest name and photo from the User collection
+            },
+            {
+                path: "replies.author",
+                select: "name photo" // Fetches the latest name and photo for reply authors
+            }
+        ])
         .select("-likedBy -dislikedBy -replies.likedBy -replies.dislikedBy")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean();
-
     return {
         comments: comments as unknown as IComment[],
         pagination: {
@@ -144,6 +181,7 @@ export const getComments = async (
         },
     };
 };
+
 
 // ─────────────────────────────────────────────────────────────
 // DELETE /api/v1/recipes/:id/comments/:commentId

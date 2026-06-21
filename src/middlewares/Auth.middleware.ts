@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import pkg from "jsonwebtoken";
 import { ApiError } from "../utils/Apierror.js";
+import User from "../models/user.model.js";
 
 const { verify } = pkg;
 
@@ -8,25 +9,16 @@ const { verify } = pkg;
 declare global {
     namespace Express {
         interface Request {
-            user?: { id: string };
+            user?: { id: string; name: string; photo: string | null };
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-// authenticate
-// Reads the Bearer token from the Authorization header,
-// verifies it with JWT_SECRET, and attaches { id } to req.user.
-//
-// JWT errors (expired, invalid signature, etc.) are passed to
-// next() so your existing errorHandler middleware handles them
-// and returns the correct 401 response automatically.
-// ─────────────────────────────────────────────────────────────
-export const authenticate = (
+export const authenticate = async (
     req: Request,
     _res: Response,
     next: NextFunction
-): void => {
+): Promise<void> => {
     try {
         const authHeader = req.headers["authorization"];
 
@@ -41,11 +33,19 @@ export const authenticate = (
             throw new ApiError(500, "Server misconfiguration: JWT_SECRET is not set.");
         }
 
-        // verify() throws TokenExpiredError / JsonWebTokenError on failure —
-        // your errorHandler already handles both and returns 401 automatically.
-        const payload = verify(token, secret) as { id: string;[key: string]: any };
+        const payload = verify(token, secret) as { id: string };
 
-        req.user = { id: payload.id };
+        // Fetch the user's name and photo to attach to the request
+        const user = await User.findById(payload.id).select("name photo");
+        if (!user) {
+            throw new ApiError(401, "User not found.");
+        }
+
+        req.user = {
+            id: user.id,
+            name: user.name,
+            photo: user.photo ?? null
+        };
 
         next();
     } catch (error) {
