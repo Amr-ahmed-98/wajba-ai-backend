@@ -143,7 +143,7 @@ export const loginUser = async (email: string, password: string) => {
 // Google login (existing users only — new users must register)
 // ─────────────────────────────────────────────────────────────
 export const loginWithGoogle = async (idToken: string) => {
-  const { googleId, email } = await verifyGoogleToken(idToken);
+  const { googleId, email, photo } = await verifyGoogleToken(idToken);   // ← grab photo here too
 
   const user = await User.findOne({ email }).select("+refreshToken");
   if (!user) {
@@ -153,13 +153,21 @@ export const loginWithGoogle = async (idToken: string) => {
     );
   }
 
-  // If the user registered with email/password, link their Google account on first Google login
   if (!user.googleId) {
+    // First time linking Google to an existing email/password account
     user.googleId = googleId;
-    await user.save();
   } else if (user.googleId !== googleId) {
-    // Someone else's Google account tried to log in as this user
     throw new ApiError(401, "Google account mismatch. Please use the correct Google account.");
+  }
+
+  // Keep photo in sync with Google — covers first-time linking, accounts
+  // created before the `photo` field existed, and avatar changes on Google's side
+  if (photo && user.photo !== photo) {
+    user.photo = photo;
+  }
+
+  if (user.isModified()) {
+    await user.save();
   }
 
   const { accessToken, refreshToken } = generateTokens(user.id, user.role);
