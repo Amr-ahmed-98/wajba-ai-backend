@@ -5,6 +5,7 @@ export interface IUser extends Document {
   email: string;
   password?: string; // Optional for Google Auth users
   googleId?: string;
+  photo?: string;
   role: "FREE_USER" | "PAID_USER" | "ADMIN";
   dietaryPreferences: string[];
   favoriteCuisines: string[];
@@ -25,6 +26,7 @@ const UserSchema = new Schema<IUser>(
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, select: false }, // Hidden by default for security
     googleId: { type: String, sparse: true, unique: true },
+    photo: { type: String, default: null },
     role: {
       type: String,
       enum: ["FREE_USER", "PAID_USER", "ADMIN"],

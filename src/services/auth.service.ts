@@ -42,6 +42,7 @@ const verifyGoogleToken = async (idToken: string) => {
       googleId: payload.sub,          // unique Google user ID
       email: payload.email,
       name: payload.name ?? "User",
+      photo: payload.picture ?? null,
     };
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
@@ -86,7 +87,7 @@ export const registerUser = async (userData: any) => {
 // The frontend sends idToken + all preference fields together.
 // ─────────────────────────────────────────────────────────────
 export const registerWithGoogle = async (idToken: string, preferences: any) => {
-  const { googleId, email, name } = await verifyGoogleToken(idToken);
+  const { googleId, email, name, photo } = await verifyGoogleToken(idToken);
 
   const existing = await User.findOne({ email });
   if (existing) {
@@ -100,6 +101,7 @@ export const registerWithGoogle = async (idToken: string, preferences: any) => {
     name,
     email,
     googleId,
+    photo,
     ...preferences,
   });
 

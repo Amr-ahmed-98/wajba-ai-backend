@@ -10,6 +10,7 @@ import {
   verifyOtpSchema,
   resetPasswordSchema,
 } from "./auth.validation.js";
+import { authenticate } from "../../../middlewares/Auth.middleware.js";
 
 const router = Router();
 
@@ -131,6 +132,58 @@ router.get("/allergies", authController.getAllergies);
  *       409:
  *         description: Email already exists
  */
+
+// ── Current user (protected, read-only) ─────────────────────
+/**
+ * @swagger
+ * /api/v1/auth/me:
+ *   get:
+ *     summary: Get the currently authenticated user's basic info
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       Returns lightweight identity data (name, email, photo, role) for the
+ *       logged-in user. Intended for UI use like navbars or comment authorship
+ *       — not a full profile endpoint.
+ *     responses:
+ *       200:
+ *         description: Current user data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     name:
+ *                       type: string
+ *                       example: Amr Ahmed
+ *                     email:
+ *                       type: string
+ *                       example: amr@example.com
+ *                     photo:
+ *                       type: string
+ *                       nullable: true
+ *                       example: https://res.cloudinary.com/.../avatar.jpg
+ *                     role:
+ *                       type: string
+ *                       example: FREE_USER
+ *       401:
+ *         description: Not authenticated
+ *       404:
+ *         description: User not found
+ */
+// GET /api/v1/auth/me  (requires Bearer access token)
+router.get("/me", authenticate, authController.getCurrentUser);
+
+
 // POST /api/v1/auth/register  { name, email, password, confirmPassword, ...preferences }
 router.post("/register", validate(registerSchema), authController.register);
 

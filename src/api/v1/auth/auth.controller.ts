@@ -112,6 +112,35 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
 };
 
 // ─────────────────────────────────────────────────────────────
+// Get current authenticated user
+// GET /api/v1/auth/me
+// Lightweight identity payload for UI use (navbar, comment author, etc).
+// NOT a profile endpoint — read-only, no update/delete here.
+// ─────────────────────────────────────────────────────────────
+export const getCurrentUser = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById(req.user?.id).select("name email photo role");
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        photo: user.photo ?? null,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
 // Refresh access token
 // POST /api/v1/auth/refresh-token
 // Reads refreshToken from httpOnly cookie (no body needed)
@@ -240,15 +269,15 @@ export const resetPassword = async (req: Request, res: Response, next: NextFunct
 // ─────────────────────────────────────────────────────────────
 export const getAllergies = (_req: Request, res: Response) => {
   const allergies = [
-    { key: "peanuts",      label: "Peanuts" },
-    { key: "tree_nuts",    label: "Tree Nuts" },
-    { key: "dairy",        label: "Dairy" },
-    { key: "eggs",         label: "Eggs" },
-    { key: "soy",          label: "Soy" },
+    { key: "peanuts", label: "Peanuts" },
+    { key: "tree_nuts", label: "Tree Nuts" },
+    { key: "dairy", label: "Dairy" },
+    { key: "eggs", label: "Eggs" },
+    { key: "soy", label: "Soy" },
     { key: "wheat_gluten", label: "Wheat/Gluten" },
-    { key: "fish",         label: "Fish" },
-    { key: "shellfish",    label: "Shellfish" },
-    { key: "sesame",       label: "Sesame" },
+    { key: "fish", label: "Fish" },
+    { key: "shellfish", label: "Shellfish" },
+    { key: "sesame", label: "Sesame" },
   ];
   res.status(200).json({ success: true, data: allergies });
 };
