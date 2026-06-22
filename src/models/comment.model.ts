@@ -5,6 +5,21 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 // Each top-level comment can have an array of replies.
 // Replies are stored inside the comment document (embedded) to
 // avoid an extra collection hop when rendering the comment thread.
+//
+// Threading model: all replies live in the SAME flat array under
+// the comment document. A reply that responds to another reply
+// carries `replyTo` (the target reply's ObjectId) and `replyToName`
+// (the target author's name, snapshotted at write time so it remains
+// stable even if the target reply is later deleted). The frontend uses
+// these two fields to render "@username" mentions and visual indent.
+//
+// Why flat and not recursive nesting?
+//   - MongoDB has no recursive query support; deeply nested sub-arrays
+//     require manual traversal and grow documents unboundedly.
+//   - Flat arrays are indexed by Mongoose's .id() helper, keeping all
+//     existing service operations (push, id(), deleteOne) unchanged.
+//   - Deleting a reply leaves its children intact — `replyToName` still
+//     carries the "@mention" so the UI stays coherent even for orphans.
 // ─────────────────────────────────────────────────────────────
 export interface IReply {
     _id: Types.ObjectId;
@@ -16,6 +31,11 @@ export interface IReply {
     dislikes: number;
     likedBy: string[];               // user IDs — dedup; select: false
     dislikedBy: string[];            // user IDs — dedup; select: false
+    // Threading: null → direct reply to the comment; ObjectId → reply to another reply
+    replyTo: Types.ObjectId | null;
+    // Snapshot of the @mentioned reply author's name. Preserved after the
+    // target reply is deleted so the UI can still show "@username" context.
+    replyToName: string | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -45,12 +65,15 @@ const replySchema = new Schema<IReply>(
     {
         author: { type: Schema.Types.ObjectId, ref: "User", required: true },
         authorName: { type: String, required: true },
-        authorPhoto: { type: String, default: null },   // populated once profile photos land
+        authorPhoto: { type: String, default: null },
         body: { type: String, required: true, trim: true, maxlength: 1000 },
         likes: { type: Number, default: 0 },
         dislikes: { type: Number, default: 0 },
         likedBy: { type: [String], default: [], select: false },
         dislikedBy: { type: [String], default: [], select: false },
+        // Threading fields — both nullable; omitted on direct-to-comment replies.
+        replyTo: { type: Schema.Types.ObjectId, default: null },
+        replyToName: { type: String, default: null },
     },
     { timestamps: true }
 );
@@ -67,7 +90,7 @@ const commentSchema = new Schema<IComment>(
         recipe: { type: Schema.Types.ObjectId, ref: "Recipe", required: true },
         author: { type: Schema.Types.ObjectId, ref: "User", required: true },
         authorName: { type: String, required: true },
-        authorPhoto: { type: String, default: null },   // populated once profile photos land
+        authorPhoto: { type: String, default: null },
         body: { type: String, required: true, trim: true, maxlength: 2000 },
         likes: { type: Number, default: 0 },
         dislikes: { type: Number, default: 0 },

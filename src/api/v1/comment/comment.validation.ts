@@ -33,10 +33,20 @@ export const reactToCommentSchema = z.object({
 });
 
 // ── POST /api/v1/recipes/:id/comments/:commentId/replies ─────
+// `replyTo` is optional — omit it for a direct reply to the comment,
+// or supply an existing reply's ObjectId to reply to that specific reply.
+// The service validates that the referenced reply actually exists in the
+// comment's replies array and snapshots the target author's name as
+// `replyToName` so the frontend can render "@username" mentions without
+// an extra lookup.
 export const addReplySchema = z.object({
     params: recipeIdParam.extend(commentIdParam.shape),
     body: z.object({
         body: z.string().trim().min(1, "Reply cannot be empty.").max(1000),
+        // Optional: the _id of another reply in this comment thread that
+        // the user is responding to. When present, the API validates it
+        // exists and snapshots the target author's name automatically.
+        replyTo: z.string().optional(),
     }),
 });
 

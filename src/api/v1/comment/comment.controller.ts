@@ -19,7 +19,6 @@ const requireUser = (req: Request): { id: string; name: string; photo: string | 
     return {
         id: user.id as string,
         name: (user.name ?? "User") as string,
-        // photo will be null until the profile-photo feature lands
         photo: (user.photo ?? null) as string | null,
     };
 };
@@ -108,6 +107,14 @@ export const dislikeComment = async (
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/recipes/:id/comments/:commentId/replies
+//
+// `replyTo` (optional body field) enables reply-to-reply threading.
+// When present, the service validates that the target reply exists
+// in this comment thread and snapshots the author name as `replyToName`
+// so the frontend can render "@username" mentions.
+//
+// Omitting `replyTo` produces a plain reply to the top-level comment —
+// identical to the old behaviour, so existing clients are unaffected.
 // ─────────────────────────────────────────────────────────────
 export const addReply = async (
     req: Request, res: Response, next: NextFunction
@@ -120,7 +127,8 @@ export const addReply = async (
             userId,
             name,
             photo,
-            req.body.body
+            req.body.body,
+            req.body.replyTo   // optional — undefined when not supplied by client
         );
         res.status(201).json({ success: true, data: comment });
     } catch (error) { next(error); }
@@ -172,7 +180,6 @@ export const dislikeReply = async (
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/recipes/:id/ratings
 // Authenticated — creates or updates the user's star rating (1–5).
-// Can be called independently of commenting.
 // ─────────────────────────────────────────────────────────────
 export const upsertRating = async (
     req: Request, res: Response, next: NextFunction
@@ -188,8 +195,6 @@ export const upsertRating = async (
 
 // ─────────────────────────────────────────────────────────────
 // DELETE /api/v1/recipes/:id/ratings
-// Authenticated — removes the user's rating (equivalent to 0 stars).
-// Recipe averageRating and ratingCount are recalculated automatically.
 // ─────────────────────────────────────────────────────────────
 export const deleteRating = async (
     req: Request, res: Response, next: NextFunction
@@ -203,7 +208,6 @@ export const deleteRating = async (
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/recipes/:id/ratings/me
-// Authenticated — returns this user's rating (or null).
 // ─────────────────────────────────────────────────────────────
 export const getMyRating = async (
     req: Request, res: Response, next: NextFunction
