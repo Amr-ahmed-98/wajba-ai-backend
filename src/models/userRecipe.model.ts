@@ -1,0 +1,196 @@
+import mongoose, { Schema, Document, Types } from "mongoose";
+import { LocalisedString } from "./recipe.model.js";
+
+// ─────────────────────────────────────────────────────────────
+// UserRecipe — recipes generated on-demand by an authenticated
+// user from a list of ingredients (photo-scanned or typed).
+//
+// Kept in its own collection so it never pollutes the
+// curator-generated Recipe collection (which has admin-only
+// fields like generationBatch / generatedAt / viewedBy).
+// ─────────────────────────────────────────────────────────────
+
+// ── Sub-document interfaces ───────────────────────────────────
+interface IUserIngredient {
+  name: string; // plain string — no i18n needed for user input
+  optional: boolean;
+  amount: string;
+}
+
+interface IUserNutrition {
+  calories: number;
+  protein: number;
+  carbohydrates: number;
+  fat: number;
+}
+
+// ── Main interface ────────────────────────────────────────────
+export interface IUserRecipe extends Document {
+  // ── Ownership ─────────────────────────────────────────────
+  owner: Types.ObjectId;     // ref: "User"
+  ownerName: string;         // snapshot at generation time
+  ownerPhoto: string | null; // snapshot at generation time
+
+  // ── Visibility ────────────────────────────────────────────
+  // true  → appears on the community page
+  // false → visible only to the owner via GET /my
+  isPublic: boolean;
+
+  // ── Source data (what the user provided) ─────────────────
+  // Stored so the owner can review what ingredients produced
+  // this recipe, and for future recommendation features.
+  sourceIngredients: string[];   // detected from photo OR typed by user
+  missingIngredients: string[];  // extra ingredients the user flagged
+
+  // ── Localised recipe content (bilingual — same pattern as Recipe) ──
+  title: LocalisedString;
+  description: LocalisedString;   // short teaser for the community card
+  cardTip: LocalisedString;       // one-liner AI tip shown on the card
+  instructions: { en: string[]; ar: string[] };
+  aiAdvice: { en: string[]; ar: string[] };
+  ingredients: IUserIngredient[]; // full ingredient list from LLM (with amounts)
+
+  // ── Language-neutral recipe fields ────────────────────────
+  imageUrl: string;    // Cloudinary URL of the AI-generated dish image
+  badge: string;       // e.g. "keto", "high_protein", "premium"
+  nutrition: IUserNutrition;
+
+  // ── Category metadata ─────────────────────────────────────
+  cuisine: string;
+  mealTypes: string[];
+  dishType: string;
+  healthTags: string[];
+
+  // ── Reactions (like / dislike) ────────────────────────────
+  // Mutual exclusion is enforced in the service layer:
+  // a user can like OR dislike but never both simultaneously.
+  likes: number;
+  dislikes: number;
+  likedBy: string[];    // user IDs — select: false
+  dislikedBy: string[]; // user IDs — select: false
+
+  // ── Rating & comments ─────────────────────────────────────
+  // Ratings are stored in the shared Rating collection
+  // (same model used for curator recipes).
+  // Comments are stored in the shared Comment collection.
+  // Both use this document's _id as their `recipe` ref.
+  averageRating: number;
+  ratingCount: number;
+  commentCount: number;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ── Sub-schemas ───────────────────────────────────────────────
+const localisedStringSchema = new Schema<LocalisedString>(
+  {
+    en: { type: String, required: true, trim: true },
+    ar: { type: String, required: true, trim: true },
+  },
+  { _id: false }
+);
+
+const userIngredientSchema = new Schema<IUserIngredient>(
+  {
+    name: { type: String, required: true, trim: true },
+    amount: { type: String, required: true, trim: true },
+    optional: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const userNutritionSchema = new Schema<IUserNutrition>(
+  {
+    calories: { type: Number, required: true, min: 0 },
+    protein: { type: Number, required: true, min: 0 },
+    carbohydrates: { type: Number, required: true, min: 0 },
+    fat: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+// ── Main schema ───────────────────────────────────────────────
+const userRecipeSchema = new Schema<IUserRecipe>(
+  {
+    // Ownership
+    owner: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    ownerName: { type: String, required: true },
+    ownerPhoto: { type: String, default: null },
+
+    // Visibility
+    isPublic: { type: Boolean, default: false },
+
+    // Source data
+    sourceIngredients: { type: [String], default: [] },
+    missingIngredients: { type: [String], default: [] },
+
+    // Localised content
+    title: { type: localisedStringSchema, required: true },
+    description: { type: localisedStringSchema, required: true },
+    cardTip: { type: localisedStringSchema, required: true },
+    instructions: {
+      type: new Schema({ en: [String], ar: [String] }, { _id: false }),
+      required: true,
+    },
+    aiAdvice: {
+      type: new Schema({ en: [String], ar: [String] }, { _id: false }),
+      default: () => ({ en: [], ar: [] }),
+    },
+    ingredients: { type: [userIngredientSchema], required: true },
+
+    // Language-neutral
+    imageUrl: { type: String, required: true },
+    badge: {
+      type: String,
+      enum: ["keto", "vegan", "high_protein", "low_calorie", "low_carb", "muscle_gain", "premium"],
+      default: "premium",
+    },
+    nutrition: { type: userNutritionSchema, required: true },
+
+    // Category
+    cuisine: {
+      type: String,
+      enum: ["italian", "egyptian", "japanese", "mexican", "indian", "arabic", "french", "asian"],
+      default: "arabic",
+    },
+    mealTypes: {
+      type: [String],
+      enum: ["breakfast", "lunch", "dinner", "snack", "dessert"],
+      default: [],
+    },
+    dishType: {
+      type: String,
+      enum: ["pasta", "seafood", "soup", "salad", "pizza", "grill", "sandwich", "bowl"],
+      default: "bowl",
+    },
+    healthTags: {
+      type: [String],
+      enum: ["keto", "vegan", "high_protein", "low_calorie", "low_carb", "vegetarian", "paleo"],
+      default: [],
+    },
+
+    // Reactions
+    likes: { type: Number, default: 0 },
+    dislikes: { type: Number, default: 0 },
+    likedBy: { type: [String], default: [], select: false },
+    dislikedBy: { type: [String], default: [], select: false },
+
+    // Stats
+    averageRating: { type: Number, default: 0, min: 0, max: 5 },
+    ratingCount: { type: Number, default: 0 },
+    commentCount: { type: Number, default: 0 },
+  },
+  { timestamps: true }
+);
+
+// ── Indexes ───────────────────────────────────────────────────
+// Community feed — public recipes sorted by newest / most liked / top rated
+userRecipeSchema.index({ isPublic: 1, createdAt: -1 });
+userRecipeSchema.index({ isPublic: 1, likes: -1 });
+userRecipeSchema.index({ isPublic: 1, averageRating: -1 });
+
+// Owner's recipe list (includes private)
+userRecipeSchema.index({ owner: 1, createdAt: -1 });
+
+export default mongoose.model<IUserRecipe>("UserRecipe", userRecipeSchema);

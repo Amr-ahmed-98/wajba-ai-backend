@@ -14,6 +14,43 @@ declare global {
     }
 }
 
+export const optionalAuth = async (
+    req: Request,
+    _res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const authHeader = req.headers["authorization"];
+
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            // No token — proceed without setting req.user
+            return next();
+        }
+
+        const token = authHeader.split(" ")[1];
+        const secret = process.env.JWT_ACCESS_SECRET;
+        if (!secret) {
+            // If secret is missing, still proceed as guest
+            return next();
+        }
+
+        const payload = verify(token, secret) as { id: string };
+        const user = await User.findById(payload.id).select("name photo");
+        if (user) {
+            req.user = {
+                id: user.id,
+                name: user.name,
+                photo: user.photo ?? null,
+            };
+        }
+
+        next();
+    } catch {
+        // Invalid token — silently proceed as guest
+        next();
+    }
+};
+
 export const authenticate = async (
     req: Request,
     _res: Response,
