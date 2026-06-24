@@ -4,7 +4,7 @@ import UserRecipe, { IUserRecipe } from "../models/userRecipe.model.js";
 import Comment from "../models/comment.model.js";
 import { Rating } from "../models/comment.model.js";
 import { ApiError } from "../utils/Apierror.js";
-import { flattenLang, Lang, parseLang } from "./recipe.service.js";
+import { Lang, parseLang } from "./recipe.service.js";
 
 // ─────────────────────────────────────────────────────────────
 // Re-export parseLang for convenience in the controller
@@ -235,7 +235,18 @@ RULES:
 2. Every human-readable text field must be in BOTH English ("en") and Arabic ("ar").
 3. Arabic must be natural, fluent, right-to-left food Arabic — not a word-for-word translation.
 4. Use primarily the available ingredients. The missing ingredients are optional additions.
-5. Amounts like "200g" or "1 tbsp" stay as flat strings.
+5. Amounts like "200g" or "1 tbsp" stay as flat strings (no localisation needed).
+6. Ingredient names MUST have both "en" and "ar" keys — see the structure below.
+
+CUISINE ACCURACY — this is critical:
+- Choose cuisine based on the ACTUAL cultural origin of the dish you generate.
+- Examples: Pancakes → american (but "american" is not in the list — map to "asian" is WRONG).
+  Use the closest correct option from the allowed list.
+- Pancakes, Burgers, BBQ Ribs → use "french" or the closest Western option available.
+- Do NOT assign "arabic" to Western dishes. Do NOT assign "italian" to Asian dishes.
+- Think: "What country/region did this dish actually originate from?"
+- Only use "arabic" for dishes that genuinely originate from Arab cuisine
+  (e.g. Koshari, Shawarma, Fatteh, Mansaf, Kibbeh).
 
 Use EXACTLY this JSON structure:
 
@@ -252,9 +263,16 @@ Use EXACTLY this JSON structure:
     "ar": ["نصيحة 1", "نصيحة 2", "نصيحة 3"]
   },
   "ingredients": [
-    { "name": "Chicken breast", "amount": "200g", "optional": false },
-    { "name": "Olive oil",      "amount": "1 tbsp", "optional": false },
-    { "name": "Fresh herbs",    "amount": "1 handful", "optional": true }
+    { "name": { "en": "Chicken breast", "ar": "صدر دجاج" }, "amount": "200g", "optional": false },
+    { "name": { "en": "Olive oil",      "ar": "زيت زيتون" }, "amount": "1 tbsp", "optional": false },
+    { "name": { "en": "Fresh herbs",    "ar": "أعشاب طازجة" }, "amount": "1 handful", "optional": true }
+  ],
+  "sourceIngredients": [
+    { "en": "Chicken breast", "ar": "صدر دجاج" },
+    { "en": "Olive oil",      "ar": "زيت زيتون" }
+  ],
+  "missingIngredients": [
+    { "en": "Fresh herbs", "ar": "أعشاب طازجة" }
   ],
   "badge": "<one of: keto|vegan|high_protein|low_calorie|low_carb|muscle_gain|premium>",
   "nutrition": {
@@ -264,10 +282,15 @@ Use EXACTLY this JSON structure:
     "fat": 12
   },
   "imagePrompt": "Photorealistic food photography of [dish name], beautifully plated, natural lighting, top-down view, high resolution",
-  "cuisine": "<MUST be exactly one of: italian|egyptian|japanese|mexican|indian|arabic|french|asian>",
+  "cuisine": "<MUST be exactly one of: italian|egyptian|japanese|mexican|indian|arabic|french|asian — pick based on the dish's TRUE cultural origin>",
   "mealTypes": ["<one or more of: breakfast|lunch|dinner|snack|dessert>"],
   "dishType": "<MUST be exactly one of: pasta|seafood|soup|salad|pizza|grill|sandwich|bowl>",
   "healthTags": ["<zero or more of: keto|vegan|high_protein|low_calorie|low_carb|vegetarian|paleo>"]
+
+IMPORTANT for sourceIngredients and missingIngredients:
+- "sourceIngredients" must mirror the user's available ingredients list: ${ingredientList}
+- "missingIngredients" must mirror the missing/extra ingredients list: ${missingList === "none" ? "[]" : missingList}
+- Translate each into Arabic. These are plain ingredient names, not recipe steps.
 }`;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -346,21 +369,46 @@ const buildOneUserRecipe = async (
     `Photorealistic food photography of ${raw.title?.en ?? "a dish"}, beautifully plated, natural lighting`;
   delete raw.imagePrompt;
 
-  // Step 2 — Sanitize enums so Mongoose never crashes on bad LLM output
+  // Step 2 — Sanitize enums so Mongoose never crashes on bad LLM output.
+  // Cuisine fallback is "italian" (neutral Western default) — NOT "arabic",
+  // which was causing wrong cuisine assignments for Western dishes.
   raw.badge = sanitizeScalar(raw.badge, VALID_ENUMS.badge, "premium");
-  raw.cuisine = sanitizeScalar(raw.cuisine, VALID_ENUMS.cuisine, "arabic");
+  raw.cuisine = sanitizeScalar(raw.cuisine, VALID_ENUMS.cuisine, "italian");
   raw.dishType = sanitizeScalar(raw.dishType, VALID_ENUMS.dishType, "bowl");
   raw.mealTypes = sanitizeArray(raw.mealTypes, VALID_ENUMS.mealTypes);
   raw.healthTags = sanitizeArray(raw.healthTags, VALID_ENUMS.healthTags);
 
-  // Flatten LLM ingredient objects (no { en, ar } needed — user recipe ingredients are plain strings)
+  // Keep bilingual ingredient names — store { en, ar } so flattenUserRecipe can localise them.
+  // The LLM now returns name as { en, ar }; fall back gracefully if it returns a plain string.
   if (Array.isArray(raw.ingredients)) {
     raw.ingredients = raw.ingredients.map((ing: any) => ({
-      name: typeof ing.name === "object" ? (ing.name.en ?? "") : (ing.name ?? ""),
+      name: typeof ing.name === "object"
+        ? { en: ing.name.en ?? "", ar: ing.name.ar ?? ing.name.en ?? "" }
+        : { en: ing.name ?? "", ar: ing.name ?? "" },
       amount: ing.amount ?? "",
       optional: ing.optional ?? false,
     }));
   }
+
+  // Normalise sourceIngredients — LLM returns [{ en, ar }] or plain strings.
+  const normalisedSourceIngredients: Array<{ en: string; ar: string }> =
+    Array.isArray(raw.sourceIngredients)
+      ? raw.sourceIngredients.map((s: any) =>
+        typeof s === "object"
+          ? { en: s.en ?? "", ar: s.ar ?? s.en ?? "" }
+          : { en: String(s), ar: String(s) }
+      )
+      : ingredients.map((s) => ({ en: s, ar: s })); // fallback — no Arabic translation
+
+  // Normalise missingIngredients — same pattern.
+  const normalisedMissingIngredients: Array<{ en: string; ar: string }> =
+    Array.isArray(raw.missingIngredients)
+      ? raw.missingIngredients.map((s: any) =>
+        typeof s === "object"
+          ? { en: s.en ?? "", ar: s.ar ?? s.en ?? "" }
+          : { en: String(s), ar: String(s) }
+      )
+      : missingIngredients.map((s) => ({ en: s, ar: s }));
 
   // Step 3 — Generate AI dish image
   console.log(`  📸 Generating dish image for: ${raw.title?.en}`);
@@ -381,8 +429,8 @@ const buildOneUserRecipe = async (
     ownerName: owner.name,
     ownerPhoto: owner.photo,
     isPublic,
-    sourceIngredients: ingredients,
-    missingIngredients,
+    sourceIngredients: normalisedSourceIngredients,
+    missingIngredients: normalisedMissingIngredients,
     title: raw.title,
     description: raw.description,
     cardTip: raw.cardTip,
@@ -465,13 +513,82 @@ export const generateUserRecipes = async (
 };
 
 // ─────────────────────────────────────────────────────────────
-// Flatten localised fields for a UserRecipe document
-// Mirrors flattenLang() from recipe.service.ts but handles the
-// plain-string ingredient names in UserRecipe.
+// Translation maps — enum values stored in DB are English keys;
+// these maps localise them for Arabic-speaking users.
+// ─────────────────────────────────────────────────────────────
+const CUISINE_AR: Record<string, string> = {
+  italian: "إيطالية",
+  egyptian: "مصرية",
+  japanese: "يابانية",
+  mexican: "مكسيكية",
+  indian: "هندية",
+  arabic: "عربية",
+  french: "فرنسية",
+  asian: "آسيوية",
+};
+
+const MEAL_TYPE_AR: Record<string, string> = {
+  breakfast: "إفطار",
+  lunch: "غداء",
+  dinner: "عشاء",
+  snack: "وجبة خفيفة",
+  dessert: "حلوى",
+};
+
+const DISH_TYPE_AR: Record<string, string> = {
+  pasta: "معكرونة",
+  seafood: "مأكولات بحرية",
+  soup: "شوربة",
+  salad: "سلطة",
+  pizza: "بيتزا",
+  grill: "مشويات",
+  sandwich: "ساندويش",
+  bowl: "طبق",
+};
+
+const HEALTH_TAG_AR: Record<string, string> = {
+  keto: "كيتو",
+  vegan: "نباتي",
+  high_protein: "عالي البروتين",
+  low_calorie: "منخفض السعرات",
+  low_carb: "منخفض الكربوهيدرات",
+  vegetarian: "نباتي (لاكتو)",
+  paleo: "باليو",
+};
+
+// ─────────────────────────────────────────────────────────────
+// Flatten localised fields for a UserRecipe document.
+// Handles:
+//   • bilingual text fields (title, description, cardTip, …)
+//   • bilingual ingredient names  { en, ar }
+//   • bilingual sourceIngredients / missingIngredients  [{ en, ar }]
+//   • enum fields (cuisine, mealTypes, dishType, healthTags)
+//     — returned as the localised string for Arabic, English key for English
 // ─────────────────────────────────────────────────────────────
 export const flattenUserRecipe = (recipe: any, lang: Lang): any => {
   const pick = (field: { en: string; ar: string } | undefined) =>
     field ? (field[lang] ?? field.en) : "";
+
+  // Localise a plain enum string using the provided translation map.
+  // Falls back to the raw English key so nothing is ever blank.
+  const localiseEnum = (value: string | undefined, map: Record<string, string>): string => {
+    if (!value) return "";
+    return lang === "ar" ? (map[value] ?? value) : value;
+  };
+
+  // Localise an array of enum strings.
+  const localiseEnumArray = (values: string[] | undefined, map: Record<string, string>): string[] => {
+    if (!Array.isArray(values)) return [];
+    return values.map((v) => (lang === "ar" ? (map[v] ?? v) : v));
+  };
+
+  // Localise an array of { en, ar } objects (sourceIngredients / missingIngredients).
+  const pickArray = (arr: Array<{ en: string; ar: string }> | string[] | undefined): string[] => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((item) =>
+      typeof item === "object" ? (item[lang] ?? item.en ?? "") : String(item)
+    );
+  };
 
   return {
     ...recipe,
@@ -480,7 +597,19 @@ export const flattenUserRecipe = (recipe: any, lang: Lang): any => {
     cardTip: pick(recipe.cardTip),
     instructions: recipe.instructions?.[lang] ?? recipe.instructions?.en ?? [],
     aiAdvice: recipe.aiAdvice?.[lang] ?? recipe.aiAdvice?.en ?? [],
-    // UserRecipe ingredients have plain-string names — no flattening needed
+    // Ingredients: name is { en, ar } — pick the right language
+    ingredients: (recipe.ingredients ?? []).map((ing: any) => ({
+      ...ing,
+      name: typeof ing.name === "object" ? pick(ing.name) : ing.name,
+    })),
+    // Ingredient lists stored as [{ en, ar }]
+    sourceIngredients: pickArray(recipe.sourceIngredients),
+    missingIngredients: pickArray(recipe.missingIngredients),
+    // Enum fields — localised for Arabic
+    cuisine: localiseEnum(recipe.cuisine, CUISINE_AR),
+    dishType: localiseEnum(recipe.dishType, DISH_TYPE_AR),
+    mealTypes: localiseEnumArray(recipe.mealTypes, MEAL_TYPE_AR),
+    healthTags: localiseEnumArray(recipe.healthTags, HEALTH_TAG_AR),
   };
 };
 

@@ -39,8 +39,8 @@ export interface IUserRecipe extends Document {
   // ── Source data (what the user provided) ─────────────────
   // Stored so the owner can review what ingredients produced
   // this recipe, and for future recommendation features.
-  sourceIngredients: string[];   // detected from photo OR typed by user
-  missingIngredients: string[];  // extra ingredients the user flagged
+  sourceIngredients: LocalisedString[];   // detected from photo OR typed by user
+  missingIngredients: LocalisedString[];  // extra ingredients the user flagged
 
   // ── Localised recipe content (bilingual — same pattern as Recipe) ──
   title: LocalisedString;
@@ -122,8 +122,8 @@ const userRecipeSchema = new Schema<IUserRecipe>(
     isPublic: { type: Boolean, default: false },
 
     // Source data
-    sourceIngredients: { type: [String], default: [] },
-    missingIngredients: { type: [String], default: [] },
+    sourceIngredients: { type: [localisedStringSchema], default: [] },
+    missingIngredients: { type: [localisedStringSchema], default: [] },
 
     // Localised content
     title: { type: localisedStringSchema, required: true },
