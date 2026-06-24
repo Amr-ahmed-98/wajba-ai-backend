@@ -4,7 +4,7 @@ import UserRecipe, { IUserRecipe } from "../models/userRecipe.model.js";
 import Comment from "../models/comment.model.js";
 import { Rating } from "../models/comment.model.js";
 import { ApiError } from "../utils/Apierror.js";
-import { Lang, parseLang } from "./recipe.service.js";
+import { flattenLang, Lang, parseLang } from "./recipe.service.js";
 
 // ─────────────────────────────────────────────────────────────
 // Re-export parseLang for convenience in the controller
@@ -378,16 +378,19 @@ const buildOneUserRecipe = async (
   raw.mealTypes = sanitizeArray(raw.mealTypes, VALID_ENUMS.mealTypes);
   raw.healthTags = sanitizeArray(raw.healthTags, VALID_ENUMS.healthTags);
 
-  // Keep bilingual ingredient names — store { en, ar } so flattenUserRecipe can localise them.
-  // The LLM now returns name as { en, ar }; fall back gracefully if it returns a plain string.
+  // Flatten bilingual ingredient names into { name: string (EN), nameAr: string (AR) }.
+  // The Mongoose schema defines `name` as a plain String — storing an object crashes it.
+  // We keep the Arabic text in the separate `nameAr` field instead.
   if (Array.isArray(raw.ingredients)) {
-    raw.ingredients = raw.ingredients.map((ing: any) => ({
-      name: typeof ing.name === "object"
-        ? { en: ing.name.en ?? "", ar: ing.name.ar ?? ing.name.en ?? "" }
-        : { en: ing.name ?? "", ar: ing.name ?? "" },
-      amount: ing.amount ?? "",
-      optional: ing.optional ?? false,
-    }));
+    raw.ingredients = raw.ingredients.map((ing: any) => {
+      const enName = typeof ing.name === "object"
+        ? (ing.name.en ?? "")
+        : (ing.name ?? "");
+      const arName = typeof ing.name === "object"
+        ? (ing.name.ar ?? ing.name.en ?? "")
+        : (ing.name ?? "");
+      return { name: enName, nameAr: arName, amount: ing.amount ?? "", optional: ing.optional ?? false };
+    });
   }
 
   // Normalise sourceIngredients — LLM returns [{ en, ar }] or plain strings.
@@ -410,21 +413,10 @@ const buildOneUserRecipe = async (
       )
       : missingIngredients.map((s) => ({ en: s, ar: s }));
 
-  // Step 3 — Generate AI dish image
-  console.log(`  📸 Generating dish image for: ${raw.title?.en}`);
-  const imageDataUri = await generateDishImage(imagePrompt);
-
-  // Step 4 — Upload to Cloudinary
-  const slug = (raw.title?.en ?? `user-recipe-${recipeIndex}`)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .slice(0, 40);
-  const publicId = `${owner.id}-${Date.now()}-${recipeIndex}-${slug}`;
-  console.log(`  ☁️  Uploading to Cloudinary as: user_recipe_images/${publicId}`);
-  const imageUrl = await uploadImageToCloudinary(imageDataUri, publicId);
-
-  // Step 5 — Persist
-  const recipe = await UserRecipe.create({
+  // Build the document payload — validated BEFORE generating the image.
+  // This catches any remaining Mongoose validation errors cheaply,
+  // so we never waste a Cloudflare AI + Cloudinary round-trip on bad data.
+  const docPayload = {
     owner: owner.id,
     ownerName: owner.name,
     ownerPhoto: owner.photo,
@@ -437,14 +429,35 @@ const buildOneUserRecipe = async (
     instructions: raw.instructions,
     aiAdvice: raw.aiAdvice,
     ingredients: raw.ingredients,
-    imageUrl,
+    imageUrl: "pending", // placeholder — replaced after upload
     badge: raw.badge,
     nutrition: raw.nutrition,
     cuisine: raw.cuisine,
     mealTypes: raw.mealTypes,
     dishType: raw.dishType,
     healthTags: raw.healthTags,
-  });
+  };
+
+  // Dry-run validation — throws a Mongoose ValidationError immediately if
+  // anything in docPayload is wrong, BEFORE we spend time generating an image.
+  const dryDoc = new UserRecipe(docPayload);
+  await dryDoc.validate();
+
+  // Step 3 — Generate AI dish image (only reached if validation passed)
+  console.log(`  📸 Generating dish image for: ${raw.title?.en}`);
+  const imageDataUri = await generateDishImage(imagePrompt);
+
+  // Step 4 — Upload to Cloudinary
+  const slug = (raw.title?.en ?? `user-recipe-${recipeIndex}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, 40);
+  const publicId = `${owner.id}-${Date.now()}-${recipeIndex}-${slug}`;
+  console.log(`  ☁️  Uploading to Cloudinary as: user_recipe_images/${publicId}`);
+  const imageUrl = await uploadImageToCloudinary(imageDataUri, publicId);
+
+  // Step 5 — Persist (reuse the validated payload, swap in the real imageUrl)
+  const recipe = await UserRecipe.create({ ...docPayload, imageUrl });
 
   console.log(`  ✅ Saved: "${recipe.title.en}"`);
   return recipe;
@@ -597,10 +610,11 @@ export const flattenUserRecipe = (recipe: any, lang: Lang): any => {
     cardTip: pick(recipe.cardTip),
     instructions: recipe.instructions?.[lang] ?? recipe.instructions?.en ?? [],
     aiAdvice: recipe.aiAdvice?.[lang] ?? recipe.aiAdvice?.en ?? [],
-    // Ingredients: name is { en, ar } — pick the right language
+    // Ingredients: stored as { name: string (EN), nameAr?: string (AR) }.
+    // Return the Arabic name when available and lang === "ar".
     ingredients: (recipe.ingredients ?? []).map((ing: any) => ({
       ...ing,
-      name: typeof ing.name === "object" ? pick(ing.name) : ing.name,
+      name: lang === "ar" && ing.nameAr ? ing.nameAr : ing.name,
     })),
     // Ingredient lists stored as [{ en, ar }]
     sourceIngredients: pickArray(recipe.sourceIngredients),
