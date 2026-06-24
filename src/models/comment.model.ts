@@ -131,7 +131,12 @@ export interface IRating extends Document {
 
 const ratingSchema = new Schema<IRating>(
     {
-        recipe: { type: Schema.Types.ObjectId, ref: "Recipe", required: true },
+        recipe: {
+            type: Schema.Types.ObjectId,
+            // No `ref` — used polymorphically for both Recipe and UserRecipe.
+            // Do NOT populate this field directly; it may point to either collection.
+            required: true,
+        },
         user: { type: Schema.Types.ObjectId, ref: "User", required: true },
         value: { type: Number, required: true, min: 1, max: 5 },
     },
