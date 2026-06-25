@@ -277,6 +277,13 @@ const handleMulterError = (
   next(err);
 };
 
+const uploadSingle = (req: Request, res: Response, next: NextFunction) => {
+  upload.single("photo")(req, res, (err) => {
+    if (err) return handleMulterError(err, req, res, next);
+    next();
+  });
+};
+
 // ── Per-user AI generation rate limiter ───────────────────────
 const generateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -504,8 +511,7 @@ router.post(
   "/generate-from-photo",
   authenticate,
   generateLimiter,
-  upload.single("photo"),
-  handleMulterError,           // ← catches multer errors BEFORE controller runs
+  uploadSingle,
   validate(generateFromPhotoSchema),
   userRecipeController.generateFromPhoto
 );
