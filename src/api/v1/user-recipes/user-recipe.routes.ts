@@ -15,6 +15,233 @@ import {
   deleteUserRecipeSchema,
 } from "./user-recipe.validation.js";
 
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     LocalisedString:
+ *       type: object
+ *       required:
+ *         - en
+ *         - ar
+ *       properties:
+ *         en:
+ *           type: string
+ *           example: "English text"
+ *         ar:
+ *           type: string
+ *           example: "العربية"
+ *
+ *     UserIngredient:
+ *       type: object
+ *       required:
+ *         - name
+ *         - amount
+ *       properties:
+ *         name:
+ *           type: string
+ *           example: "chicken breast"
+ *         nameAr:
+ *           type: string
+ *           example: "صدور دجاج"
+ *         amount:
+ *           type: string
+ *           example: "200g"
+ *         optional:
+ *           type: boolean
+ *           example: false
+ *
+ *     UserNutrition:
+ *       type: object
+ *       required:
+ *         - calories
+ *         - protein
+ *         - carbohydrates
+ *         - fat
+ *       properties:
+ *         calories:
+ *           type: number
+ *           example: 350
+ *         protein:
+ *           type: number
+ *           example: 30
+ *         carbohydrates:
+ *           type: number
+ *           example: 10
+ *         fat:
+ *           type: number
+ *           example: 12
+ *
+ *     UserRecipe:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *           example: "64f3c2a1b7e4d90012345678"
+ *         owner:
+ *           type: string
+ *           example: "64f3c2a1b7e4d90012341111"
+ *         ownerName:
+ *           type: string
+ *           example: "Amr Ahmed"
+ *         ownerPhoto:
+ *           type: string
+ *           nullable: true
+ *           example: "https://cloudinary.com/avatar.jpg"
+ *         isPublic:
+ *           type: boolean
+ *           example: false
+ *         title:
+ *           $ref: '#/components/schemas/LocalisedString'
+ *         description:
+ *           $ref: '#/components/schemas/LocalisedString'
+ *         cardTip:
+ *           $ref: '#/components/schemas/LocalisedString'
+ *         instructions:
+ *           type: object
+ *           properties:
+ *             en:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["Cut the chicken.", "Grill for 15 mins."]
+ *             ar:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["قطع الدجاج", "اشوِ لمدة 15 دقيقة"]
+ *         aiAdvice:
+ *           type: object
+ *           properties:
+ *             en:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["Use olive oil for better taste."]
+ *             ar:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["استخدم زيت الزيتون لمذاق أفضل."]
+ *         ingredients:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/UserIngredient'
+ *         imageUrl:
+ *           type: string
+ *           example: "https://cloudinary.com/recipe.jpg"
+ *         badge:
+ *           type: string
+ *           enum: [keto, vegan, high_protein, low_calorie, low_carb, muscle_gain, premium]
+ *           example: "premium"
+ *         nutrition:
+ *           $ref: '#/components/schemas/UserNutrition'
+ *         cuisine:
+ *           type: string
+ *           enum: [italian, egyptian, japanese, mexican, indian, arabic, french, asian]
+ *           example: "italian"
+ *         mealTypes:
+ *           type: array
+ *           items:
+ *             type: string
+ *             enum: [breakfast, lunch, dinner, snack, dessert]
+ *           example: ["lunch", "dinner"]
+ *         dishType:
+ *           type: string
+ *           enum: [pasta, seafood, soup, salad, pizza, grill, sandwich, bowl]
+ *           example: "bowl"
+ *         healthTags:
+ *           type: array
+ *           items:
+ *             type: string
+ *             enum: [keto, vegan, high_protein, low_calorie, low_carb, vegetarian, paleo]
+ *           example: ["high_protein"]
+ *         likes:
+ *           type: integer
+ *           example: 10
+ *         dislikes:
+ *           type: integer
+ *           example: 1
+ *         bookmarkCount:
+ *           type: integer
+ *           example: 5
+ *         viewCount:
+ *           type: integer
+ *           example: 100
+ *         averageRating:
+ *           type: number
+ *           example: 4.5
+ *         ratingCount:
+ *           type: integer
+ *           example: 12
+ *         commentCount:
+ *           type: integer
+ *           example: 3
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-06-25T16:46:51Z"
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-06-25T16:46:51Z"
+ *
+ *     UserRecipeSummary:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *           example: "64f3c2a1b7e4d90012345678"
+ *         ownerName:
+ *           type: string
+ *           example: "Amr Ahmed"
+ *         ownerPhoto:
+ *           type: string
+ *           nullable: true
+ *           example: "https://cloudinary.com/avatar.jpg"
+ *         title:
+ *           type: string
+ *           example: "Grilled Lemon Chicken"
+ *         description:
+ *           type: string
+ *           example: "A delicious, easy lemon-infused grilled chicken."
+ *         imageUrl:
+ *           type: string
+ *           example: "https://cloudinary.com/recipe.jpg"
+ *         badge:
+ *           type: string
+ *           example: "high_protein"
+ *         likes:
+ *           type: integer
+ *           example: 24
+ *         bookmarkCount:
+ *           type: integer
+ *           example: 5
+ *         averageRating:
+ *           type: number
+ *           example: 4.8
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-06-25T16:46:51Z"
+ *
+ *     Pagination:
+ *       type: object
+ *       properties:
+ *         total:
+ *           type: integer
+ *           example: 120
+ *         page:
+ *           type: integer
+ *           example: 1
+ *         limit:
+ *           type: integer
+ *           example: 12
+ *         totalPages:
+ *           type: integer
+ *           example: 10
+ */
+
 const router = Router();
 
 // ── Multer setup ──────────────────────────────────────────────
@@ -190,7 +417,7 @@ router.post(
  *               photo:
  *                 type: string
  *                 format: binary
- *                 description: The ingredient photo. Accepted formats: JPEG, PNG, WEBP. Max size: 10 MB.
+ *                 description: "The ingredient photo. Accepted formats: JPEG, PNG, WEBP. Max size: 10 MB."
  *               missingIngredients:
  *                 type: string
  *                 description: >
