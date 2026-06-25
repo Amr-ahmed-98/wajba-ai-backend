@@ -114,9 +114,40 @@ const generateDishImage = async (prompt: string): Promise<string> => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Analyse an ingredient photo using Groq's vision model
-// (llama-4-scout-17b-16e-instruct supports vision via the
-// messages API with image_url content parts).
+// Non-food keywords — if detected, the image is rejected.
+// ─────────────────────────────────────────────────────────────
+const NON_FOOD_KEYWORDS = new Set([
+  "laptop", "computer", "phone", "keyboard", "mouse", "screen", "monitor",
+  "table", "chair", "desk", "sofa", "couch", "bed", "pillow", "blanket",
+  "shoe", "shoes", "sock", "socks", "hat", "cap", "jacket", "shirt", "pants",
+  "glasses", "sunglasses", "watch", "jewelry", "ring", "necklace", "bracelet",
+  "wallet", "purse", "bag", "backpack", "suitcase", "luggage", "umbrella",
+  "book", "notebook", "pen", "pencil", "paper", "document", "card", "money",
+  "coin", "bill", "cash", "credit card", "debit card", "id card", "passport",
+  "keys", "key", "remote", "controller", "cable", "charger", "adapter",
+  "AGE", "AGE_", "person", "people", "face", "hand", "arm", "leg", "foot",
+  "body", "head", "hair", "skin", "eye", "ear", "nose", "mouth", "finger",
+  "tooth", "nail", "blood", "bone", "muscle", "diaper", "toy", "doll",
+  "ball", "balloon", "kite", "game", "puzzle", "building", "house",
+  "car", "truck", "bus", "bike", "motorcycle", "train", "plane", "boat",
+  "road", "street", "bridge", "wall", "door", "window", "roof", "floor",
+  "ceiling", "light", "lamp", "fan", "air conditioner", "heater",
+  "clock", "calendar", "picture", "painting", "mirror", "plant pot",
+  "vase", "candle", "decoration", "tissue", "toilet paper", "trash",
+  "bin", "bucket", "broom", "mop", "vacuum", "iron", "iron board",
+  "hanger", "hook", "shelf", "cabinet", "drawer", "closet", "wardrobe",
+  "curtain", "blind", "rug", "carpet", "mat", "towel", "napkin",
+  "plate", "bowl", "cup", "glass", "mug", "fork", "spoon", "knife",
+  "chopstick", "napkin ring", "placemat", "coaster", "tray", "serving dish",
+  "cutting board", "knife block", "spice rack", "pot holder", "oven mitt",
+  "apron", "kitchen towel", "dish soap", "sponge", "scrubber", "trash can",
+  "recycling bin", "compost bin", "foil", "wrap", "bag", "container",
+  "jar", "bottle", "can", "box", "package", "label", "st_eq"  ,
+]);
+
+// ─────────────────────────────────────────────────────────────
+// Analyse an ingredient photo using Groq's vision model.
+// Validates that the image actually contains food/ingredients.
 // Returns a deduplicated list of recognised ingredient names.
 // ─────────────────────────────────────────────────────────────
 export const analyzeIngredientsFromImage = async (
@@ -150,10 +181,14 @@ export const analyzeIngredientsFromImage = async (
             },
             {
               type: "text",
-              text: `Identify every food ingredient visible in this image.
-Return ONLY a valid JSON array of ingredient names as plain English strings — no quantities, no markdown, no explanation.
-Example: ["chicken breast", "olive oil", "garlic", "lemon"]
-If you cannot identify any ingredients, return an empty array: []`,
+              text: `First, determine if this image contains food/ingredients.
+If it does NOT contain food or ingredients, return exactly: {"isFood": false, "ingredients": []}
+If it DOES contain food/ingredients, return: {"isFood": true, "ingredients": ["ingredient1", "ingredient2", ...]}
+
+Return ONLY valid JSON — no markdown, no explanation.
+Identify every food ingredient visible. Use plain English strings — no quantities.
+Example: {"isFood": true, "ingredients": ["chicken breast", "olive oil", "garlic", "lemon"]}
+If no clear ingredients are visible even though it's food, return: {"isFood": true, "ingredients": []}`,
             },
           ],
         },
@@ -162,21 +197,53 @@ If you cannot identify any ingredients, return an empty array: []`,
   });
 
   if (!response.ok) {
-    const errBody = await response.json().catch(() => ({}));
-    throw new ApiError(502, `Groq vision API failed (HTTP ${response.status}): ${JSON.stringify(errBody)}`);
+    let errMsg = "Groq vision API returned an error.";
+    try { errMsg = JSON.stringify(await (await response.json())); } catch { errMsg = `${response.status} ${response.statusText}`; }
+    console.error("❌ Groq vision API error:", errMsg);
+    throw new ApiError(502, `Groq vision API failed (${errMsg}). Check server logs.`);
   }
 
   const data = await response.json() as any;
-  const rawText: string = data.choices?.[0]?.message?.content ?? "[]";
+  const rawText: string = data.choices?.[0]?.message?.content ?? "{\"isFood\":false,\"ingredients\":[]}";
   const clean = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
   try {
     const parsed = JSON.parse(clean);
-    if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.filter((v: any) => typeof v === "string" && v.trim().length > 0))];
-  } catch {
-    console.warn("⚠️  Could not parse vision model response as JSON:", clean.slice(0, 200));
-    return [];
+    
+    // Validate the structure
+    if (typeof parsed.isFood !== "boolean") {
+      console.warn("⚠️ Vision model returned non-food response structure:", clean.slice(0, 200));
+      throw new ApiError(422, "Could not verify that the photo contains food. Please upload a photo of ingredients.");
+    }
+
+    if (!parsed.isFood) {
+      throw new ApiError(422, "The uploaded photo does not appear to contain food or ingredients. Please upload a photo of your ingredients.");
+    }
+
+    if (!Array.isArray(parsed.ingredients)) {
+      return [];
+    }
+
+    const ingredients = [...new Set(
+      parsed.ingredients.filter((v: any) => typeof v === "string" && v.trim().length > 0)
+    )] as string[];
+
+    // Additional validation: reject known non-food items
+    const suspiciousItems = ingredients.filter(ing => {
+      const lower = ing.toLowerCase();
+      return NON_FOOD_KEYWORDS.has(lower) || NON_FOOD_KEYWORDS.has(lower.replace(/\s+/g, "_"));
+    });
+
+    if (suspiciousItems.length > 0) {
+console.warn("⚠️ Non-food items detected in vision response:", suspiciousItems);
+      throw new ApiError(422, `The photo does not appear to contain food ingredients. Detected items: ${suspiciousItems.join(", ")}. Please upload a photo of your ingredients.`);
+    }
+
+    return ingredients;
+  } catch (err: any) {
+    if (err instanceof ApiError) throw err;
+    console.warn("⚠️ Could not parse vision model response as JSON:", clean.slice(0, 200));
+    throw new ApiError(422, "Could not understand the image. Please upload a clearer photo of your ingredients.");
   }
 };
 

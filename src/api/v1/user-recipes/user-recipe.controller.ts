@@ -45,6 +45,14 @@ export const generateFromText = async (
       lang: getLang(req),
     });
 
+    // If ALL recipes failed, throw the first error so the client gets
+    // a clear HTTP error instead of an empty "success" response.
+    if (result.recipes.length === 0 && result.errors.length > 0) {
+      const firstError = result.errors[0];
+      console.error("❌ All recipes failed:", firstError);
+      throw new ApiError(502, firstError);
+    }
+
     res.status(201).json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -99,6 +107,14 @@ export const generateFromPhoto = async (
       count,
       lang: getLang(req),
     });
+
+    // If ALL recipes failed, throw the first error so the client gets
+    // a clear HTTP error instead of an empty "success" response.
+    if (result.recipes.length === 0 && result.errors.length > 0) {
+      const firstError = result.errors[0];
+      console.error("❌ All recipes failed:", firstError);
+      throw new ApiError(502, firstError);
+    }
 
     res.status(201).json({ success: true, data: { detectedIngredients, ...result } });
   } catch (error) {
