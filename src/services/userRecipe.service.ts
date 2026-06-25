@@ -142,7 +142,7 @@ const NON_FOOD_KEYWORDS = new Set([
   "cutting board", "knife block", "spice rack", "pot holder", "oven mitt",
   "apron", "kitchen towel", "dish soap", "sponge", "scrubber", "trash can",
   "recycling bin", "compost bin", "foil", "wrap", "bag", "container",
-  "jar", "bottle", "can", "box", "package", "label", "st_eq"  ,
+  "jar", "bottle", "can", "box", "package", "label", "st_eq",
 ]);
 
 // ─────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ If no clear ingredients are visible even though it's food, return: {"isFood": tr
 
   try {
     const parsed = JSON.parse(clean);
-    
+
     // Validate the structure
     if (typeof parsed.isFood !== "boolean") {
       console.warn("⚠️ Vision model returned non-food response structure:", clean.slice(0, 200));
@@ -235,7 +235,7 @@ If no clear ingredients are visible even though it's food, return: {"isFood": tr
     });
 
     if (suspiciousItems.length > 0) {
-console.warn("⚠️ Non-food items detected in vision response:", suspiciousItems);
+      console.warn("⚠️ Non-food items detected in vision response:", suspiciousItems);
       throw new ApiError(422, `The photo does not appear to contain food ingredients. Detected items: ${suspiciousItems.join(", ")}. Please upload a photo of your ingredients.`);
     }
 
@@ -771,10 +771,8 @@ export const listMyRecipes = async (
     },
   };
 };
+// ── Increment viewCount on detail fetch ───────────────────────
 
-// ─────────────────────────────────────────────────────────────
-// Get a single user recipe — enforces privacy for private recipes
-// ─────────────────────────────────────────────────────────────
 export const getUserRecipeById = async (
   recipeId: string,
   requesterId?: string,
@@ -783,7 +781,14 @@ export const getUserRecipeById = async (
   if (!mongoose.isValidObjectId(recipeId)) {
     throw new ApiError(400, "Invalid recipe ID.");
   }
-  const recipe = await UserRecipe.findById(recipeId).lean();
+
+  // Atomically increment viewCount and return the updated doc
+  const recipe = await UserRecipe.findByIdAndUpdate(
+    recipeId,
+    { $inc: { viewCount: 1 } },
+    { new: true }
+  ).lean();
+
   if (!recipe) throw new ApiError(404, "Recipe not found.");
 
   if (!recipe.isPublic && recipe.owner.toString() !== requesterId) {
@@ -792,7 +797,6 @@ export const getUserRecipeById = async (
 
   return flattenUserRecipe(recipe, lang);
 };
-
 // ─────────────────────────────────────────────────────────────
 // React to a community recipe — like or dislike
 // Mutual exclusion: liking removes a previous dislike and vice-versa.
@@ -886,4 +890,41 @@ export const deleteUserRecipe = async (
     Rating.deleteMany({ recipe: recipeId }),
   ]);
   await recipe.deleteOne();
+};
+
+// ─────────────────────────────────────────────────────────────
+// ADD these two functions to the bottom of userRecipe.service.ts
+// ─────────────────────────────────────────────────────────────
+
+
+
+// ── Bookmark toggle ───────────────────────────────────────────
+// Stored on UserRecipe.bookmarkedBy (same pattern as likedBy).
+// Frontend "my bookmarks" should query GET /user-recipes/my-recipes
+// filtered client-side, OR maintain a separate bookmarks array on User.
+// This function toggles the bookmark and syncs bookmarkCount.
+export const bookmarkUserRecipe = async (
+  recipeId: string,
+  userId: string
+): Promise<{ bookmarked: boolean; bookmarkCount: number }> => {
+  if (!mongoose.isValidObjectId(recipeId)) {
+    throw new ApiError(400, "Invalid recipe ID.");
+  }
+
+  const recipe = await UserRecipe.findById(recipeId).select("+bookmarkedBy");
+  if (!recipe) throw new ApiError(404, "Recipe not found.");
+  if (!recipe.isPublic) throw new ApiError(403, "Only public community recipes can be bookmarked.");
+
+  const already = (recipe.bookmarkedBy ?? []).includes(userId);
+
+  if (already) {
+    recipe.bookmarkedBy = recipe.bookmarkedBy.filter((id) => id !== userId);
+    recipe.bookmarkCount = Math.max(0, (recipe.bookmarkCount ?? 1) - 1);
+  } else {
+    recipe.bookmarkedBy.push(userId);
+    recipe.bookmarkCount = (recipe.bookmarkCount ?? 0) + 1;
+  }
+
+  await recipe.save();
+  return { bookmarked: !already, bookmarkCount: recipe.bookmarkCount };
 };

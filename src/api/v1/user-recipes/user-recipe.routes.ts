@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
 import validate from "../../../middlewares/validate.middleware.js";
@@ -18,71 +18,63 @@ import {
 const router = Router();
 
 // ── Multer setup ──────────────────────────────────────────────
-// Stores the file in memory (Buffer) so it can be forwarded
-// directly to the Groq vision API without writing to disk.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 }, // 10 MB max, 1 file
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ["image/jpeg", "image/png", "image/webp", "image/heic"];
+    // HEIC removed — not supported as a base64 data URI by Groq vision
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Only JPEG, PNG, WEBP or HEIC images are allowed."));
+      cb(new Error("Only JPEG, PNG, or WEBP images are allowed."));
     }
   },
 });
 
+// ── Multer error handler ──────────────────────────────────────
+// Must sit immediately after upload.single() on every multipart route.
+// Without this, multer errors (wrong mimetype, file too large, wrong field
+// name) bubble up as unhandled exceptions and produce the generic 500.
+const handleMulterError = (
+  err: any,
+  _req: Request,
+  _res: Response,
+  next: NextFunction
+) => {
+  if (err instanceof multer.MulterError || err?.message) {
+    // Re-shape as a proper 400 ApiError-style response
+    _res.status(400).json({ success: false, message: err.message ?? "File upload error." });
+    return;
+  }
+  next(err);
+};
+
 // ── Per-user AI generation rate limiter ───────────────────────
-// Each generation call hits Groq (vision + text) + Cloudflare AI
-// + Cloudinary — far more expensive than a standard read.
-// Cap: 10 generation requests per hour, keyed by authenticated user ID
-// (falls back to IP for any unauthenticated hit that slips through).
 const generateLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour sliding window
+  windowMs: 60 * 60 * 1000,
   max: 10,
   keyGenerator: (req) => (req as any).user?.id ?? req.ip ?? "unknown",
   message: { success: false, message: "Too many recipe generation requests. Please try again in an hour." },
-  standardHeaders: true,  // Return RateLimit-* headers
-  legacyHeaders: false,   // Suppress deprecated X-RateLimit-* headers
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ═══════════════════════════════════════════════════════════════
-// RECIPE GENERATION
-// ═══════════════════════════════════════════════════════════════
+// ── GENERATION ────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/generate-from-text:
  *   post:
- *     summary: Generate AI recipe(s) from a typed ingredient list
- *     tags: [User Recipes — Generation]
- *     description: >
- *       Authenticated users type their available ingredients as plain strings.
- *       The AI (Groq llama-3.3-70b) generates up to 5 bilingual (EN + AR) recipes,
- *       each with full instructions, ingredient list with amounts, nutrition facts,
- *       and an AI-generated dish image (Cloudflare flux-1-schnell → Cloudinary).
- *
- *       Rate limit: 10 requests per hour per user.
- *
- *       If `isPublic: true`, the recipe is immediately visible on the community feed.
- *       If `isPublic: false` (default), it is private — only the owner can retrieve it.
+ *     summary: Generate AI recipes from a list of ingredients (text)
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
- *     parameters:
- *       - in: header
- *         name: Accept-Language
- *         description: >
- *           Language for the flattened response fields (title, description, instructions, etc.).
- *           Stored bilingually; this header only controls which language is returned.
- *         required: false
- *         schema:
- *           type: string
- *           enum: [en, ar]
- *           default: en
- *         example: en
- *
+ *     description: >
+ *       Uses an AI model to generate one or more recipes based on the
+ *       ingredients provided by the authenticated user. Results are saved
+ *       to the database and optionally published to the community feed.
+ *       Rate-limited to **10 requests per hour** per user.
  *     requestBody:
  *       required: true
  *       content:
@@ -94,80 +86,75 @@ const generateLimiter = rateLimit({
  *             properties:
  *               ingredients:
  *                 type: array
- *                 description: >
- *                   REQUIRED. Ingredients the user currently has on hand.
- *                   Each item is a plain English string. Minimum 1 item.
+ *                 minItems: 1
+ *                 description: Ingredients the user currently has available.
  *                 items:
  *                   type: string
  *                   minLength: 1
- *                 minItems: 1
- *                 example: ["chicken breast", "olive oil", "garlic", "lemon"]
- *
+ *                 example: ["chicken breast", "garlic", "olive oil", "lemon"]
  *               missingIngredients:
  *                 type: array
- *                 description: >
- *                   OPTIONAL. Extra ingredients the user is willing to buy / add
- *                   but does not currently have. The AI treats these as optional
- *                   additions when building the recipe.
+ *                 description: Ingredients the user does NOT have but would like the AI to include anyway.
  *                 items:
  *                   type: string
- *                   minLength: 1
  *                 default: []
- *                 example: ["fresh herbs", "lemon zest"]
- *
+ *                 example: ["parsley", "paprika"]
  *               isPublic:
  *                 type: boolean
- *                 description: >
- *                   OPTIONAL. Whether the generated recipe(s) should be published
- *                   to the community feed immediately after generation.
- *                   false → recipe is private (visible only via GET /my-recipes or GET /:id as owner).
- *                   true  → recipe appears on GET /community.
+ *                 description: Whether to publish the generated recipes to the community feed.
  *                 default: false
- *                 example: false
- *
+ *                 example: true
  *               count:
  *                 type: integer
- *                 description: >
- *                   OPTIONAL. Number of distinct recipes to generate from the same
- *                   ingredient list. Each recipe uses a different cooking style /
- *                   dish type to ensure variety. A 3-second pause is injected
- *                   between LLM calls to respect Groq's free-tier RPM limit.
  *                 minimum: 1
  *                 maximum: 5
+ *                 description: Number of recipe variations to generate (1–5).
  *                 default: 1
- *                 example: 2
- *
+ *                 example: 3
  *     responses:
  *       201:
- *         description: Recipe(s) generated and saved successfully.
+ *         description: Recipes generated and saved successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: object
  *                   properties:
  *                     recipes:
  *                       type: array
- *                       description: Array of generated recipe objects (language-flattened).
- *                       items: { type: object }
+ *                       description: Successfully generated and saved recipe objects.
+ *                       items:
+ *                         $ref: '#/components/schemas/UserRecipe'
  *                     errors:
  *                       type: array
- *                       description: >
- *                         Per-recipe error messages if some (but not all) generations
- *                         failed. An empty array means all recipes succeeded.
- *                       items: { type: string }
+ *                       description: Any partial errors that occurred during generation (e.g., one recipe out of three failed).
+ *                       items:
+ *                         type: string
  *                       example: []
  *       400:
- *         description: >
- *           Validation error — e.g. `ingredients` array is empty or missing,
- *           `count` is outside 1–5, or a field has the wrong type.
+ *         description: Validation error (e.g., empty ingredients array).
  *       401:
- *         description: Missing or invalid Bearer token.
+ *         description: Authentication required.
  *       429:
- *         description: Rate limit exceeded — more than 10 generation requests in the last hour.
+ *         description: Rate limit exceeded — too many generation requests in the past hour.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Too many recipe generation requests. Please try again in an hour."
+ *       502:
+ *         description: AI service failed to generate any recipes.
  */
 router.post(
   "/generate-from-text",
@@ -177,41 +164,20 @@ router.post(
   userRecipeController.generateFromText
 );
 
-// ───────────────────────────────────────────────────────────────
-
 /**
  * @swagger
  * /api/v1/user-recipes/generate-from-photo:
  *   post:
- *     summary: Generate AI recipe(s) from an uploaded ingredient photo
- *     tags: [User Recipes — Generation]
- *     description: >
- *       Upload a photo containing food ingredients. The Groq vision model
- *       (llama-4-scout-17b-16e-instruct) analyses the image and returns a
- *       deduplicated list of detected ingredient names. Those names are then
- *       fed into the same text-generation pipeline as `/generate-from-text`.
- *
- *       The response includes `detectedIngredients` — the list the AI found in
- *       the photo — so the client can display what was recognised.
- *
- *       This is a `multipart/form-data` request (not JSON). All non-file fields
- *       are sent as plain form strings.
- *
- *       Rate limit: 10 requests per hour per user.
+ *     summary: Generate AI recipes by uploading a photo of ingredients
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
- *     parameters:
- *       - in: header
- *         name: Accept-Language
- *         description: >
- *           Language for flattened response text fields (title, description, etc.).
- *         required: false
- *         schema:
- *           type: string
- *           enum: [en, ar]
- *           default: en
- *
+ *     description: >
+ *       Upload an image (JPEG, PNG, or WEBP, max 10 MB) containing ingredients.
+ *       The AI first detects the visible ingredients in the photo and then
+ *       generates recipes from them. Results are saved and optionally published
+ *       to the community feed.
+ *       Rate-limited to **10 requests per hour** per user.
  *     requestBody:
  *       required: true
  *       content:
@@ -224,170 +190,153 @@ router.post(
  *               photo:
  *                 type: string
  *                 format: binary
- *                 description: >
- *                   REQUIRED. The ingredient photo to analyse.
- *                   Accepted MIME types: image/jpeg, image/png, image/webp, image/heic.
- *                   Maximum file size: 10 MB.
- *
+ *                 description: The ingredient photo. Accepted formats: JPEG, PNG, WEBP. Max size: 10 MB.
  *               missingIngredients:
  *                 type: string
  *                 description: >
- *                   OPTIONAL. A JSON-encoded array of extra ingredient names the user
- *                   is willing to add. Must be valid JSON. Parsed server-side.
- *                   Falls back to [] if omitted or malformed.
- *                 example: '["fresh herbs", "lemon zest"]'
- *
+ *                   JSON-encoded array of ingredient strings the user lacks but wants
+ *                   included (e.g., `["salt","pepper"]`).
+ *                 example: '["parsley","cumin"]'
  *               isPublic:
  *                 type: string
- *                 description: >
- *                   OPTIONAL. Send the string "true" to publish the recipe to the
- *                   community feed, or "false" (default) to keep it private.
- *                   Note: form-data sends all values as strings.
  *                 enum: ["true", "false"]
+ *                 description: Set to "true" to publish the generated recipes to the community feed.
  *                 default: "false"
- *                 example: "false"
- *
  *               count:
  *                 type: string
- *                 description: >
- *                   OPTIONAL. Number of distinct recipes to generate (1–5).
- *                   Sent as a string; parsed with parseInt server-side.
- *                   Clamps to 1 if the value is not a valid integer.
+ *                 description: Number of recipe variations to generate (1–5, parsed as integer).
  *                 default: "1"
- *                 example: "1"
- *
+ *                 example: "2"
  *     responses:
  *       201:
- *         description: Recipe(s) generated successfully.
+ *         description: Ingredients detected and recipes generated successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: object
  *                   properties:
  *                     detectedIngredients:
  *                       type: array
- *                       description: Ingredient names extracted from the photo by the AI vision model.
- *                       items: { type: string }
- *                       example: ["chicken breast", "olive oil", "garlic"]
+ *                       description: List of ingredient names the AI identified in the photo.
+ *                       items:
+ *                         type: string
+ *                       example: ["tomatoes", "onion", "garlic"]
  *                     recipes:
  *                       type: array
- *                       description: Generated recipe objects (language-flattened).
- *                       items: { type: object }
+ *                       description: Generated and saved recipe objects.
+ *                       items:
+ *                         $ref: '#/components/schemas/UserRecipe'
  *                     errors:
  *                       type: array
- *                       items: { type: string }
+ *                       description: Partial generation errors, if any.
+ *                       items:
+ *                         type: string
  *                       example: []
  *       400:
- *         description: No image file was attached to the request (field name must be `photo`).
- *       401:
- *         description: Missing or invalid Bearer token.
- *       422:
  *         description: >
- *           Image was received and processed, but the vision model could not
- *           identify any food ingredients in it.
+ *           No image file uploaded, wrong field name, unsupported MIME type
+ *           (not JPEG/PNG/WEBP), or file size exceeds 10 MB.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Only JPEG, PNG, or WEBP images are allowed."
+ *       401:
+ *         description: Authentication required.
+ *       422:
+ *         description: No ingredients could be detected in the uploaded photo.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Could not detect any ingredients from the uploaded photo."
  *       429:
- *         description: Rate limit exceeded.
+ *         description: Rate limit exceeded — too many generation requests in the past hour.
+ *       502:
+ *         description: AI service failed to generate any recipes.
  */
 router.post(
   "/generate-from-photo",
   authenticate,
   generateLimiter,
   upload.single("photo"),
+  handleMulterError,           // ← catches multer errors BEFORE controller runs
   validate(generateFromPhotoSchema),
   userRecipeController.generateFromPhoto
 );
 
-// ═══════════════════════════════════════════════════════════════
-// COMMUNITY FEED
-// ═══════════════════════════════════════════════════════════════
+// ── COMMUNITY FEED ────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/community:
  *   get:
- *     summary: List public community recipes (paginated)
- *     tags: [User Recipes — Community]
+ *     summary: List publicly shared community recipes
+ *     tags: [User Recipes]
  *     description: >
- *       Fully public endpoint — no authentication required.
- *       Returns recipes that other users have generated and chosen to share
- *       (`isPublic: true`), paginated and sorted by the chosen strategy.
- *
- *       Each card includes: title, description, imageUrl, badge, cardTip,
- *       nutrition.calories, ownerName, ownerPhoto, likes, dislikes,
- *       averageRating, ratingCount, commentCount, cuisine, mealTypes,
- *       dishType, healthTags, createdAt.
- *
+ *       Returns a paginated list of all recipes that users have set to public.
+ *       This endpoint is **public** — no authentication required.
+ *       The response language is determined by the `Accept-Language` header.
  *     parameters:
- *       - in: header
- *         name: Accept-Language
- *         description: Language for flattened text fields.
- *         required: false
- *         schema:
- *           type: string
- *           enum: [en, ar]
- *           default: en
- *
  *       - in: query
  *         name: sort
- *         description: >
- *           OPTIONAL. Sort strategy for the feed.
- *           newest     → sorted by createdAt DESC (default).
- *           most_liked → sorted by likes DESC.
- *           top_rated  → sorted by averageRating DESC.
- *         required: false
  *         schema:
  *           type: string
  *           enum: [newest, most_liked, top_rated]
  *           default: newest
- *         example: newest
- *
+ *         description: Sort order for the recipes feed.
  *       - in: query
  *         name: page
- *         description: OPTIONAL. Page number (1-indexed).
- *         required: false
  *         schema:
  *           type: integer
  *           minimum: 1
  *           default: 1
- *         example: 1
- *
+ *         description: Page number (1-indexed).
  *       - in: query
  *         name: limit
- *         description: OPTIONAL. Number of recipes per page (max 50).
- *         required: false
  *         schema:
  *           type: integer
  *           minimum: 1
  *           maximum: 50
  *           default: 12
- *         example: 12
- *
+ *         description: Number of recipes per page (max 50).
  *     responses:
  *       200:
- *         description: Paginated community recipes returned.
+ *         description: Community recipes returned successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: array
- *                   items: { type: object }
+ *                   items:
+ *                     $ref: '#/components/schemas/UserRecipeSummary'
  *                 pagination:
- *                   type: object
- *                   properties:
- *                     total: { type: integer, description: "Total matching documents." }
- *                     page: { type: integer }
- *                     limit: { type: integer }
- *                     totalPages: { type: integer }
- *                     hasNextPage: { type: boolean }
+ *                   $ref: '#/components/schemas/Pagination'
  *       400:
- *         description: Invalid query parameter (e.g. sort value not in enum, page < 1).
+ *         description: Invalid query parameters.
  */
 router.get(
   "/community",
@@ -395,78 +344,55 @@ router.get(
   userRecipeController.listCommunity
 );
 
-// ═══════════════════════════════════════════════════════════════
-// MY RECIPES (OWNER)
-// ═══════════════════════════════════════════════════════════════
+// ── MY RECIPES ────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/my-recipes:
  *   get:
- *     summary: List all recipes owned by the authenticated user
- *     tags: [User Recipes — My Recipes]
- *     description: >
- *       Returns both public AND private recipes that belong to the
- *       current user, sorted by newest first. Private recipes are excluded
- *       from the community feed but are always visible here.
- *
- *       Each item includes: title, description, imageUrl, badge, cardTip,
- *       isPublic, nutrition.calories, likes, dislikes, averageRating,
- *       ratingCount, commentCount, createdAt.
+ *     summary: List the authenticated user's own generated recipes
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
+ *     description: >
+ *       Returns a paginated list of all recipes (public and private) that belong
+ *       to the currently authenticated user. The response language is determined
+ *       by the `Accept-Language` header.
  *     parameters:
- *       - in: header
- *         name: Accept-Language
- *         description: Language for flattened text fields.
- *         required: false
- *         schema:
- *           type: string
- *           enum: [en, ar]
- *           default: en
- *
  *       - in: query
  *         name: page
- *         description: OPTIONAL. Page number (1-indexed).
- *         required: false
  *         schema:
  *           type: integer
  *           minimum: 1
  *           default: 1
- *
+ *         description: Page number (1-indexed).
  *       - in: query
  *         name: limit
- *         description: OPTIONAL. Recipes per page (max 50).
- *         required: false
  *         schema:
  *           type: integer
  *           minimum: 1
  *           maximum: 50
  *           default: 12
- *
+ *         description: Number of recipes per page (max 50).
  *     responses:
  *       200:
- *         description: User's recipes returned.
+ *         description: User's recipes returned successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: array
- *                   items: { type: object }
+ *                   items:
+ *                     $ref: '#/components/schemas/UserRecipeSummary'
  *                 pagination:
- *                   type: object
- *                   properties:
- *                     total: { type: integer }
- *                     page: { type: integer }
- *                     limit: { type: integer }
- *                     totalPages: { type: integer }
- *                     hasNextPage: { type: boolean }
+ *                   $ref: '#/components/schemas/Pagination'
  *       401:
- *         description: Missing or invalid Bearer token.
+ *         description: Authentication required.
  */
 router.get(
   "/my-recipes",
@@ -475,75 +401,47 @@ router.get(
   userRecipeController.listMyRecipes
 );
 
-// ═══════════════════════════════════════════════════════════════
-// SINGLE RECIPE DETAIL
-// ═══════════════════════════════════════════════════════════════
+// ── SINGLE RECIPE ─────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/{id}:
  *   get:
- *     summary: Get a single user-generated recipe by ID
+ *     summary: Get a single user recipe by ID
  *     tags: [User Recipes]
  *     description: >
- *       Returns the full recipe document (all fields including instructions,
- *       aiAdvice, full ingredient list with amounts, nutrition, etc.).
- *
- *       Access rules:
- *         - isPublic=true  → anyone can access, no token needed.
- *         - isPublic=false → only the owner can access (send Bearer token);
- *                            returns 403 for any other caller.
- *
- *       The response text fields are flattened to the requested language
- *       via the Accept-Language header.
- *
+ *       Fetches full details of a user-generated recipe. Each access increments
+ *       the recipe's `viewCount`. Authentication is **optional** — if a valid
+ *       Bearer token is supplied the user's bookmark/reaction state is included
+ *       in the response. Private recipes are only accessible by their owner.
  *     parameters:
  *       - in: path
  *         name: id
- *         description: >
- *           REQUIRED. MongoDB ObjectId of the UserRecipe document.
- *           Must be a valid 24-character hex string.
  *         required: true
  *         schema:
  *           type: string
- *           pattern: "^[a-fA-F0-9]{24}$"
- *           example: "6672a1f4e3b45c0012abcdef"
- *
- *       - in: header
- *         name: Accept-Language
- *         description: Language for text fields in the response.
- *         required: false
- *         schema:
- *           type: string
- *           enum: [en, ar]
- *           default: en
- *
- *       - in: header
- *         name: Authorization
- *         description: >
- *           OPTIONAL for public recipes, REQUIRED for private recipes.
- *           Format: "Bearer <token>"
- *         required: false
- *         schema:
- *           type: string
- *           example: "Bearer eyJhbGciOiJIUzI1NiIsInR..."
- *
+ *         description: The unique ID of the user recipe.
+ *         example: "64f3c2a1b7e4d90012345678"
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
  *     responses:
  *       200:
- *         description: Full recipe document returned.
+ *         description: Recipe fetched successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
- *                 data: { type: object, description: "Full UserRecipe document (language-flattened)." }
- *       400:
- *         description: id is not a valid MongoDB ObjectId.
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/UserRecipe'
  *       403:
- *         description: Recipe exists but is private and you are not the owner.
+ *         description: Recipe is private and the requester is not the owner.
  *       404:
- *         description: No recipe found with the given id.
+ *         description: Recipe not found.
  */
 router.get(
   "/:id",
@@ -552,40 +450,29 @@ router.get(
   userRecipeController.getUserRecipeById
 );
 
-// ═══════════════════════════════════════════════════════════════
-// REACTIONS (LIKE / DISLIKE)
-// ═══════════════════════════════════════════════════════════════
+// ── REACTIONS ────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/{id}/react:
  *   post:
- *     summary: Like or dislike a community recipe (toggle)
- *     tags: [User Recipes — Community]
- *     description: >
- *       Toggle a like or dislike on a public community recipe.
- *
- *       Rules:
- *         - Like and dislike are mutually exclusive. Liking an already-disliked
- *           recipe removes the dislike first, and vice-versa.
- *         - Sending the SAME reaction a second time toggles it OFF (removes it).
- *         - Private recipes (isPublic=false) return 403 — reactions are only
- *           permitted on community-published recipes.
- *
- *       Returns the updated aggregate counts (not individual user states).
+ *     summary: Like or dislike a user recipe
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
+ *     description: >
+ *       Toggles a reaction (like or dislike) on a recipe. If the user has
+ *       already reacted with the **same** reaction it is removed (un-react).
+ *       If the user switches from like to dislike (or vice-versa), the old
+ *       reaction is replaced. Returns the updated like/dislike counts.
  *     parameters:
  *       - in: path
  *         name: id
- *         description: REQUIRED. MongoDB ObjectId of the target UserRecipe.
  *         required: true
  *         schema:
  *           type: string
- *           pattern: "^[a-fA-F0-9]{24}$"
- *           example: "6672a1f4e3b45c0012abcdef"
- *
+ *         description: The unique ID of the user recipe to react to.
+ *         example: "64f3c2a1b7e4d90012345678"
  *     requestBody:
  *       required: true
  *       content:
@@ -597,36 +484,35 @@ router.get(
  *             properties:
  *               reaction:
  *                 type: string
- *                 description: >
- *                   REQUIRED. The reaction to apply (or toggle off).
- *                   "like"    → increments likes, clears any dislike.
- *                   "dislike" → increments dislikes, clears any like.
- *                   Sending the same value again removes the reaction.
  *                 enum: [like, dislike]
+ *                 description: The reaction type to apply.
  *                 example: "like"
- *
  *     responses:
  *       200:
- *         description: Reaction applied/removed. Updated counts returned.
+ *         description: Reaction recorded and updated counts returned.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: object
  *                   properties:
- *                     likes: { type: integer, example: 42 }
- *                     dislikes: { type: integer, example: 3 }
+ *                     likes:
+ *                       type: integer
+ *                       example: 42
+ *                     dislikes:
+ *                       type: integer
+ *                       example: 3
  *       400:
- *         description: reaction field is missing or not one of [like, dislike].
+ *         description: Invalid reaction value.
  *       401:
- *         description: Missing or invalid Bearer token.
- *       403:
- *         description: The recipe is private — only public recipes can receive reactions.
+ *         description: Authentication required.
  *       404:
- *         description: No recipe found with the given id.
+ *         description: Recipe not found.
  */
 router.post(
   "/:id/react",
@@ -635,59 +521,105 @@ router.post(
   userRecipeController.reactToRecipe
 );
 
-// ═══════════════════════════════════════════════════════════════
-// VISIBILITY TOGGLE
-// ═══════════════════════════════════════════════════════════════
+// ── BOOKMARK ─────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/v1/user-recipes/{id}/visibility:
- *   patch:
- *     summary: Toggle a recipe between public and private (owner only)
- *     tags: [User Recipes — My Recipes]
- *     description: >
- *       Flips the `isPublic` flag on the recipe.
- *       true  → false : recipe is removed from the community feed.
- *       false → true  : recipe is published to the community feed.
- *
- *       Only the recipe owner can call this endpoint.
- *       No request body is needed — the server reads the current state
- *       and inverts it.
+ * /api/v1/user-recipes/{id}/bookmark:
+ *   post:
+ *     summary: Toggle bookmark on a user recipe
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
+ *     description: >
+ *       Bookmarks the specified recipe for the authenticated user. If the recipe
+ *       is already bookmarked, this call removes the bookmark (toggle behaviour).
+ *       Returns the updated bookmark state.
  *     parameters:
  *       - in: path
  *         name: id
- *         description: REQUIRED. MongoDB ObjectId of the UserRecipe to toggle.
  *         required: true
  *         schema:
  *           type: string
- *           pattern: "^[a-fA-F0-9]{24}$"
- *           example: "6672a1f4e3b45c0012abcdef"
- *
+ *         description: The unique ID of the user recipe to bookmark.
+ *         example: "64f3c2a1b7e4d90012345678"
  *     responses:
  *       200:
- *         description: Visibility toggled. New state returned.
+ *         description: Bookmark state toggled successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
  *                 data:
  *                   type: object
  *                   properties:
- *                     isPublic:
+ *                     bookmarked:
  *                       type: boolean
- *                       description: The new visibility state after the toggle.
+ *                       description: true if the recipe is now bookmarked, false if removed.
  *                       example: true
  *       401:
- *         description: Missing or invalid Bearer token.
- *       403:
- *         description: You are not the owner of this recipe.
+ *         description: Authentication required.
  *       404:
- *         description: No recipe found with the given id.
+ *         description: Recipe not found.
+ */
+router.post(
+  "/:id/bookmark",
+  authenticate,
+  validate(toggleVisibilitySchema), // reuses recipeIdParam shape
+  userRecipeController.bookmarkRecipe
+);
+
+// ── VISIBILITY ────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/v1/user-recipes/{id}/visibility:
+ *   patch:
+ *     summary: Toggle user recipe visibility
+ *     tags: [User Recipes]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       Toggles the visibility of the recipe between public (visible in the community feed)
+ *       and private (only visible to the owner). Only the recipe owner can perform this action.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The unique ID of the user recipe.
+ *         example: "64f3c2a1b7e4d90012345678"
+ *     responses:
+ *       200:
+ *         description: Visibility toggled successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                       example: "64f3c2a1b7e4d90012345678"
+ *                     isPublic:
+ *                       type: boolean
+ *                       example: true
+ *       401:
+ *         description: Authentication required.
+ *       403:
+ *         description: Only the owner is allowed to change the visibility of this recipe.
+ *       404:
+ *         description: Recipe not found.
  */
 router.patch(
   "/:id/visibility",
@@ -696,53 +628,46 @@ router.patch(
   userRecipeController.toggleVisibility
 );
 
-// ═══════════════════════════════════════════════════════════════
-// DELETE RECIPE
-// ═══════════════════════════════════════════════════════════════
+// ── DELETE ────────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/v1/user-recipes/{id}:
  *   delete:
- *     summary: Permanently delete a user recipe (owner only)
- *     tags: [User Recipes — My Recipes]
- *     description: >
- *       Hard-deletes the UserRecipe document and cascades:
- *         1. Deletes the associated Cloudinary dish image.
- *         2. Deletes all Comment documents referencing this recipe.
- *         3. Deletes all Rating documents referencing this recipe.
- *
- *       This action is irreversible. Only the recipe owner can perform it.
- *       No request body is needed.
+ *     summary: Delete a user recipe by ID
+ *     tags: [User Recipes]
  *     security:
  *       - bearerAuth: []
- *
+ *     description: >
+ *       Deletes a user-generated recipe. Only the owner of the recipe can delete it.
  *     parameters:
  *       - in: path
  *         name: id
- *         description: REQUIRED. MongoDB ObjectId of the UserRecipe to delete.
  *         required: true
  *         schema:
  *           type: string
- *           pattern: "^[a-fA-F0-9]{24}$"
- *           example: "6672a1f4e3b45c0012abcdef"
- *
+ *         description: The unique ID of the user recipe to delete.
+ *         example: "64f3c2a1b7e4d90012345678"
  *     responses:
  *       200:
- *         description: Recipe, image, comments, and ratings all deleted.
+ *         description: Recipe deleted successfully.
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 success: { type: boolean, example: true }
- *                 message: { type: string, example: "Recipe deleted." }
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Recipe deleted."
  *       401:
- *         description: Missing or invalid Bearer token.
+ *         description: Authentication required.
  *       403:
- *         description: You are not the owner of this recipe.
+ *         description: Only the owner is allowed to delete this recipe.
  *       404:
- *         description: No recipe found with the given id.
+ *         description: Recipe not found.
  */
 router.delete(
   "/:id",

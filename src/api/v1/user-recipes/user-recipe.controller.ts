@@ -3,16 +3,9 @@ import * as userRecipeService from "../../../services/userRecipe.service.js";
 import { parseLang } from "../../../services/recipe.service.js";
 import { ApiError } from "../../../utils/Apierror.js";
 
-// ─────────────────────────────────────────────────────────────
-// Helper — read Accept-Language header and resolve to "en" | "ar"
-// ─────────────────────────────────────────────────────────────
 const getLang = (req: Request) =>
   parseLang(req.headers["accept-language"] as string | undefined);
 
-// ─────────────────────────────────────────────────────────────
-// Typed helper — extract authenticated user from request.
-// Auth middleware sets req.user = { id, name, photo }.
-// ─────────────────────────────────────────────────────────────
 const requireUser = (req: Request): { id: string; name: string; photo: string | null } => {
   const user = (req as any).user;
   if (!user?.id) throw new ApiError(401, "Authentication required.");
@@ -23,10 +16,16 @@ const requireUser = (req: Request): { id: string; name: string; photo: string | 
   };
 };
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/user-recipes/generate-from-text
-// Generate recipe(s) from typed ingredient list.
-// ─────────────────────────────────────────────────────────────
+// ── Helper: stringify errors safely ──────────────────────────
+// Previously `result.errors[0]` could be an object → "[object Object]"
+const stringifyError = (err: unknown): string => {
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  try { return JSON.stringify(err); } catch { return "Unknown error"; }
+};
+
+// ── POST /generate-from-text ──────────────────────────────────
+
 export const generateFromText = async (
   req: Request,
   res: Response,
@@ -45,12 +44,8 @@ export const generateFromText = async (
       lang: getLang(req),
     });
 
-    // If ALL recipes failed, throw the first error so the client gets
-    // a clear HTTP error instead of an empty "success" response.
     if (result.recipes.length === 0 && result.errors.length > 0) {
-      const firstError = result.errors[0];
-      console.error("❌ All recipes failed:", firstError);
-      throw new ApiError(502, firstError);
+      throw new ApiError(502, stringifyError(result.errors[0]));
     }
 
     res.status(201).json({ success: true, data: result });
@@ -59,10 +54,8 @@ export const generateFromText = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/user-recipes/generate-from-photo
-// Upload an ingredient photo, AI analyses it, then generate recipe(s).
-// ─────────────────────────────────────────────────────────────
+// ── POST /generate-from-photo ─────────────────────────────────
+
 export const generateFromPhoto = async (
   req: Request,
   res: Response,
@@ -71,11 +64,12 @@ export const generateFromPhoto = async (
   try {
     const { id, name, photo } = requireUser(req);
 
+    // Multer errors are caught by handleMulterError middleware in the route,
+    // so if we reach here without req.file it's a genuine missing-file error.
     if (!req.file) {
-      throw new ApiError(400, "No image file uploaded.");
+      throw new ApiError(400, "No image file uploaded. Send a JPEG, PNG, or WEBP as the 'photo' field.");
     }
 
-    // Parse optional fields from form-data
     let missingIngredients: string[] = [];
     if (req.body.missingIngredients) {
       try {
@@ -89,7 +83,6 @@ export const generateFromPhoto = async (
     const rawCount = parseInt(req.body.count ?? "1", 10);
     const count = isNaN(rawCount) ? 1 : Math.min(Math.max(rawCount, 1), 5);
 
-    // Analyze the uploaded image
     const detectedIngredients = await userRecipeService.analyzeIngredientsFromImage(
       req.file.buffer,
       req.file.mimetype
@@ -108,12 +101,8 @@ export const generateFromPhoto = async (
       lang: getLang(req),
     });
 
-    // If ALL recipes failed, throw the first error so the client gets
-    // a clear HTTP error instead of an empty "success" response.
     if (result.recipes.length === 0 && result.errors.length > 0) {
-      const firstError = result.errors[0];
-      console.error("❌ All recipes failed:", firstError);
-      throw new ApiError(502, firstError);
+      throw new ApiError(502, stringifyError(result.errors[0]));
     }
 
     res.status(201).json({ success: true, data: { detectedIngredients, ...result } });
@@ -122,10 +111,8 @@ export const generateFromPhoto = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/user-recipes/community
-// Public — list public community recipes with sort & pagination.
-// ─────────────────────────────────────────────────────────────
+// ── GET /community ────────────────────────────────────────────
+
 export const listCommunity = async (
   req: Request,
   res: Response,
@@ -145,10 +132,8 @@ export const listCommunity = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/user-recipes/my-recipes
-// Authenticated — list current user's own recipes (public + private).
-// ─────────────────────────────────────────────────────────────
+// ── GET /my-recipes ───────────────────────────────────────────
+
 export const listMyRecipes = async (
   req: Request,
   res: Response,
@@ -169,10 +154,9 @@ export const listMyRecipes = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/user-recipes/:id
-// Public for community recipes; private requires owner auth.
-// ─────────────────────────────────────────────────────────────
+// ── GET /:id ──────────────────────────────────────────────────
+// Increments viewCount on every access (public or owner).
+
 export const getUserRecipeById = async (
   req: Request,
   res: Response,
@@ -192,10 +176,8 @@ export const getUserRecipeById = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/user-recipes/:id/react
-// Authenticated — like or dislike a community recipe (toggle).
-// ─────────────────────────────────────────────────────────────
+// ── POST /:id/react ───────────────────────────────────────────
+
 export const reactToRecipe = async (
   req: Request,
   res: Response,
@@ -217,10 +199,28 @@ export const reactToRecipe = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// PATCH /api/v1/user-recipes/:id/visibility
-// Authenticated — toggle recipe public/private (owner only).
-// ─────────────────────────────────────────────────────────────
+// ── POST /:id/bookmark ────────────────────────────────────────
+
+export const bookmarkRecipe = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { id: userId } = requireUser(req);
+    const result = await userRecipeService.bookmarkUserRecipe(
+      req.params.id as string,
+      userId
+    );
+
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ── PATCH /:id/visibility ─────────────────────────────────────
+
 export const toggleVisibility = async (
   req: Request,
   res: Response,
@@ -239,10 +239,8 @@ export const toggleVisibility = async (
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// DELETE /api/v1/user-recipes/:id
-// Authenticated — delete recipe + Cloudinary image (owner only).
-// ─────────────────────────────────────────────────────────────
+// ── DELETE /:id ───────────────────────────────────────────────
+
 export const deleteUserRecipe = async (
   req: Request,
   res: Response,
