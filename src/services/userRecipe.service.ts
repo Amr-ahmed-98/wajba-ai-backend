@@ -862,13 +862,17 @@ export const toggleVisibility = async (
   recipeId: string,
   userId: string
 ): Promise<{ isPublic: boolean }> => {
-  const recipe = await UserRecipe.findById(recipeId);
+  const recipe = await UserRecipe.findById(recipeId).select("owner isPublic");
   if (!recipe) throw new ApiError(404, "Recipe not found.");
   if (recipe.owner.toString() !== userId) throw new ApiError(403, "You can only edit your own recipes.");
 
-  recipe.isPublic = !recipe.isPublic;
-  await recipe.save();
-  return { isPublic: recipe.isPublic };
+  const updated = await UserRecipe.findByIdAndUpdate(
+    recipeId,
+    { isPublic: !recipe.isPublic },
+    { new: true, select: "isPublic" }
+  );
+
+  return { isPublic: updated!.isPublic };
 };
 
 // ─────────────────────────────────────────────────────────────
