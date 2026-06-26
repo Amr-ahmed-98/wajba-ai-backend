@@ -809,49 +809,50 @@ export const reactToUserRecipe = async (
   userId: string,
   reaction: Reaction
 ): Promise<{ likes: number; dislikes: number }> => {
-  const recipe = await UserRecipe.findById(recipeId).select("+likedBy +dislikedBy");
+  const recipe = await UserRecipe.findById(recipeId).select("isPublic likes dislikes likedBy dislikedBy");
   if (!recipe) throw new ApiError(404, "Recipe not found.");
   if (!recipe.isPublic) throw new ApiError(403, "You can only react to public community recipes.");
 
   const likedBy = recipe.likedBy ?? [];
   const dislikedBy = recipe.dislikedBy ?? [];
-
   const hasLiked = likedBy.includes(userId);
   const hasDisliked = dislikedBy.includes(userId);
 
+  let likeDelta = 0, dislikeDelta = 0;
+  let newLikedBy = [...likedBy];
+  let newDislikedBy = [...dislikedBy];
+
   if (reaction === "like") {
     if (hasLiked) {
-      // Toggle off — remove like
-      recipe.likedBy = likedBy.filter((id) => id !== userId);
-      recipe.likes = Math.max(0, recipe.likes - 1);
+      newLikedBy = newLikedBy.filter(id => id !== userId);
+      likeDelta = -1;
     } else {
-      // Add like, remove any existing dislike
-      recipe.likedBy = [...likedBy, userId];
-      recipe.likes += 1;
-      if (hasDisliked) {
-        recipe.dislikedBy = dislikedBy.filter((id) => id !== userId);
-        recipe.dislikes = Math.max(0, recipe.dislikes - 1);
-      }
+      newLikedBy.push(userId);
+      likeDelta = 1;
+      if (hasDisliked) { newDislikedBy = newDislikedBy.filter(id => id !== userId); dislikeDelta = -1; }
     }
   } else {
-    // dislike
     if (hasDisliked) {
-      // Toggle off — remove dislike
-      recipe.dislikedBy = dislikedBy.filter((id) => id !== userId);
-      recipe.dislikes = Math.max(0, recipe.dislikes - 1);
+      newDislikedBy = newDislikedBy.filter(id => id !== userId);
+      dislikeDelta = -1;
     } else {
-      // Add dislike, remove any existing like
-      recipe.dislikedBy = [...dislikedBy, userId];
-      recipe.dislikes += 1;
-      if (hasLiked) {
-        recipe.likedBy = likedBy.filter((id) => id !== userId);
-        recipe.likes = Math.max(0, recipe.likes - 1);
-      }
+      newDislikedBy.push(userId);
+      dislikeDelta = 1;
+      if (hasLiked) { newLikedBy = newLikedBy.filter(id => id !== userId); likeDelta = -1; }
     }
   }
 
-  await recipe.save();
-  return { likes: recipe.likes, dislikes: recipe.dislikes };
+  const updated = await UserRecipe.findByIdAndUpdate(
+    recipeId,
+    {
+      $inc: { likes: likeDelta, dislikes: dislikeDelta },
+      likedBy: newLikedBy,
+      dislikedBy: newDislikedBy,
+    },
+    { new: true, select: "likes dislikes" }
+  );
+
+  return { likes: updated!.likes, dislikes: updated!.dislikes };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -911,24 +912,22 @@ export const bookmarkUserRecipe = async (
   recipeId: string,
   userId: string
 ): Promise<{ bookmarked: boolean; bookmarkCount: number }> => {
-  if (!mongoose.isValidObjectId(recipeId)) {
-    throw new ApiError(400, "Invalid recipe ID.");
-  }
+  if (!mongoose.isValidObjectId(recipeId)) throw new ApiError(400, "Invalid recipe ID.");
 
-  const recipe = await UserRecipe.findById(recipeId).select("+bookmarkedBy");
+  const recipe = await UserRecipe.findById(recipeId).select("isPublic bookmarkedBy bookmarkCount");
   if (!recipe) throw new ApiError(404, "Recipe not found.");
   if (!recipe.isPublic) throw new ApiError(403, "Only public community recipes can be bookmarked.");
 
   const already = (recipe.bookmarkedBy ?? []).includes(userId);
+  const newBookmarkedBy = already
+    ? recipe.bookmarkedBy.filter(id => id !== userId)
+    : [...recipe.bookmarkedBy, userId];
+  const newCount = Math.max(0, (recipe.bookmarkCount ?? 0) + (already ? -1 : 1));
 
-  if (already) {
-    recipe.bookmarkedBy = recipe.bookmarkedBy.filter((id) => id !== userId);
-    recipe.bookmarkCount = Math.max(0, (recipe.bookmarkCount ?? 1) - 1);
-  } else {
-    recipe.bookmarkedBy.push(userId);
-    recipe.bookmarkCount = (recipe.bookmarkCount ?? 0) + 1;
-  }
-
-  await recipe.save();
-  return { bookmarked: !already, bookmarkCount: recipe.bookmarkCount };
+  await UserRecipe.findByIdAndUpdate(
+    recipeId,
+    { bookmarkedBy: newBookmarkedBy, bookmarkCount: newCount },
+    { runValidators: false }
+  );
+  return { bookmarked: !already, bookmarkCount: newCount };
 };
