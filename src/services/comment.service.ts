@@ -3,6 +3,8 @@ import Comment, { IComment } from "../models/comment.model.js";
 import { Rating } from "../models/comment.model.js";
 import Recipe from "../models/recipe.model.js";
 import { ApiError } from "../utils/Apierror.js";
+import UserRecipe from "../models/userRecipe.model.js";
+import { resolveRecipeSource, RecipeSource } from "./unified.service.js";
 
 // ─────────────────────────────────────────────────────────────
 // Pagination helper (shared shape)
@@ -19,14 +21,9 @@ interface PaginationMeta {
 // Internal helper — assert recipe exists
 // Throws 404 so callers don't need to repeat the check.
 // ─────────────────────────────────────────────────────────────
-const assertRecipeExists = async (recipeId: string): Promise<void> => {
-    // FIX: guard before constructing ObjectId — an invalid ID would throw
-    // an ugly CastError inside the aggregation instead of a clean 400.
-    if (!mongoose.isValidObjectId(recipeId)) {
-        throw new ApiError(400, "Invalid recipe ID.");
-    }
-    const exists = await Recipe.exists({ _id: recipeId });
-    if (!exists) throw new ApiError(404, "Recipe not found.");
+const assertRecipeExists = async (recipeId: string): Promise<RecipeSource> => {
+    const { source } = await resolveRecipeSource(recipeId); // throws 400/404
+    return source;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -50,27 +47,22 @@ const assertCommentExists = async (
 // document accurate without drift.
 // ─────────────────────────────────────────────────────────────
 const syncRecipeRatingStats = async (
-    recipeId: string
+    recipeId: string,
+    source: RecipeSource
 ): Promise<{ averageRating: number; ratingCount: number }> => {
-    if (!mongoose.isValidObjectId(recipeId)) {
-        throw new ApiError(400, "Invalid recipe ID.");
-    }
-
     const [stats] = await Rating.aggregate([
         { $match: { recipe: new Types.ObjectId(recipeId) } },
-        {
-            $group: {
-                _id: null,
-                avg: { $avg: "$value" },
-                count: { $sum: 1 },
-            },
-        },
+        { $group: { _id: null, avg: { $avg: "$value" }, count: { $sum: 1 } } },
     ]);
 
     const averageRating = stats ? Math.round(stats.avg * 10) / 10 : 0;
     const ratingCount = stats ? stats.count : 0;
 
-    await Recipe.findByIdAndUpdate(recipeId, { averageRating, ratingCount });
+    if (source === "curator") {
+        await Recipe.findByIdAndUpdate(recipeId, { averageRating, ratingCount });
+    } else {
+        await UserRecipe.findByIdAndUpdate(recipeId, { averageRating, ratingCount });
+    }
 
     return { averageRating, ratingCount };
 };
@@ -85,18 +77,13 @@ export const addComment = async (
     authorPhoto: string | null,
     body: string
 ): Promise<IComment> => {
-    await assertRecipeExists(recipeId);
-
-    const comment = await Comment.create({
-        recipe: recipeId,
-        author: userId,
-        authorName,
-        authorPhoto: authorPhoto ?? null,
-        body,
-    });
-
-    await Recipe.findByIdAndUpdate(recipeId, { $inc: { commentCount: 1 } });
-
+    const source = await assertRecipeExists(recipeId);
+    const comment = await Comment.create({ recipe: recipeId, author: userId, authorName, authorPhoto: authorPhoto ?? null, body });
+    if (source === "curator") {
+        await Recipe.findByIdAndUpdate(recipeId, { $inc: { commentCount: 1 } });
+    } else {
+        await UserRecipe.findByIdAndUpdate(recipeId, { $inc: { commentCount: 1 } });
+    }
     return comment;
 };
 
@@ -111,7 +98,7 @@ export const getComments = async (
     recipeId: string,
     page = 1,
     limit = 10
-): Promise<{ comments: IComment[]; pagination: PaginationMeta }> => {
+) => {
     await assertRecipeExists(recipeId);
     const skip = (page - 1) * limit;
     const total = await Comment.countDocuments({ recipe: recipeId });
@@ -153,6 +140,7 @@ export const deleteComment = async (
     commentId: string,
     userId: string
 ): Promise<void> => {
+    const source = await assertRecipeExists(recipeId);
     const comment = await assertCommentExists(commentId, recipeId);
 
     if (comment.author.toString() !== userId) {
@@ -161,13 +149,20 @@ export const deleteComment = async (
 
     await comment.deleteOne();
 
-    const updated = await Recipe.findByIdAndUpdate(
-        recipeId,
-        { $inc: { commentCount: -1 } },
-        { new: true }
-    );
-    if (updated && updated.commentCount < 0) {
-        await Recipe.findByIdAndUpdate(recipeId, { commentCount: 0 });
+    if (source === "curator") {
+        const updated = await Recipe.findByIdAndUpdate(
+            recipeId, { $inc: { commentCount: -1 } }, { new: true }
+        );
+        if (updated && updated.commentCount < 0) {
+            await Recipe.findByIdAndUpdate(recipeId, { commentCount: 0 });
+        }
+    } else {
+        const updated = await UserRecipe.findByIdAndUpdate(
+            recipeId, { $inc: { commentCount: -1 } }, { new: true }
+        );
+        if (updated && updated.commentCount < 0) {
+            await UserRecipe.findByIdAndUpdate(recipeId, { commentCount: 0 });
+        }
     }
 };
 
@@ -426,15 +421,11 @@ export const upsertRating = async (
     userId: string,
     value: number
 ): Promise<{ averageRating: number; ratingCount: number; yourRating: number }> => {
-    await assertRecipeExists(recipeId);
-
+    const source = await assertRecipeExists(recipeId);
     await Rating.findOneAndUpdate(
-        { recipe: recipeId, user: userId },
-        { value },
-        { upsert: true, new: true }
+        { recipe: recipeId, user: userId }, { value }, { upsert: true, new: true }
     );
-
-    const stats = await syncRecipeRatingStats(recipeId);
+    const stats = await syncRecipeRatingStats(recipeId, source);
     return { ...stats, yourRating: value };
 };
 
@@ -446,15 +437,11 @@ export const deleteRating = async (
     recipeId: string,
     userId: string
 ): Promise<{ averageRating: number; ratingCount: number }> => {
-    await assertRecipeExists(recipeId);
-
+    const source = await assertRecipeExists(recipeId);
     const existing = await Rating.findOne({ recipe: recipeId, user: userId });
     if (!existing) throw new ApiError(404, "You have not rated this recipe.");
-
     await existing.deleteOne();
-
-    const stats = await syncRecipeRatingStats(recipeId);
-    return stats;
+    return syncRecipeRatingStats(recipeId, source);
 };
 
 // ─────────────────────────────────────────────────────────────

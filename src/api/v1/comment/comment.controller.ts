@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import * as commentService from "../../../services/comment.service.js";
 import { ApiError } from "../../../utils/Apierror.js";
+import { resolveRecipeSource, assertUserRecipeIsPublic } from "../../../services/unified.service.js";
 
 // ─────────────────────────────────────────────────────────────
 // Typed helper — extract authenticated user from request.
@@ -23,14 +24,26 @@ const requireUser = (req: Request): { id: string; name: string; photo: string | 
     };
 };
 
+
+
+// Helper — enforces community-only access for user recipes
+const assertSocialAllowed = async (recipeId: string) => {
+    const { source } = await resolveRecipeSource(recipeId);
+    if (source === "user") await assertUserRecipeIsPublic(recipeId);
+};
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/recipes/:id/comments
 // Public — anyone can read comments.
 // ─────────────────────────────────────────────────────────────
+// public user recipes show comments, private don't. Add check there too.
 export const getComments = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        if (req.params.id as string) {
+            await assertSocialAllowed(req.params.id as string);
+        }
         const result = await commentService.getComments(
             req.params.id as string,
             req.query.page ? Number(req.query.page) : 1,
@@ -50,6 +63,7 @@ export const addComment = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId, name, photo } = requireUser(req);
         const comment = await commentService.addComment(
             req.params.id as string,
@@ -85,6 +99,7 @@ export const likeComment = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const counts = await commentService.reactToComment(
             req.params.id as string, req.params.commentId as string, userId, "like"
@@ -97,6 +112,7 @@ export const dislikeComment = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const counts = await commentService.reactToComment(
             req.params.id as string, req.params.commentId as string, userId, "dislike"
@@ -120,6 +136,7 @@ export const addReply = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId, name, photo } = requireUser(req);
         const comment = await commentService.addReply(
             req.params.id as string,
@@ -157,6 +174,7 @@ export const likeReply = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const counts = await commentService.reactToReply(
             req.params.id as string, req.params.commentId as string, req.params.replyId as string, userId, "like"
@@ -169,6 +187,7 @@ export const dislikeReply = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const counts = await commentService.reactToReply(
             req.params.id as string, req.params.commentId as string, req.params.replyId as string, userId, "dislike"
@@ -185,6 +204,7 @@ export const upsertRating = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const stats = await commentService.upsertRating(
             req.params.id as string, userId, Number(req.body.value)
@@ -200,6 +220,7 @@ export const deleteRating = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const stats = await commentService.deleteRating(req.params.id as string, userId);
         res.status(200).json({ success: true, data: stats });
@@ -213,8 +234,10 @@ export const getMyRating = async (
     req: Request, res: Response, next: NextFunction
 ) => {
     try {
+        await assertSocialAllowed(req.params.id as string);
         const { id: userId } = requireUser(req);
         const value = await commentService.getMyRating(req.params.id as string, userId);
         res.status(200).json({ success: true, data: { yourRating: value } });
     } catch (error) { next(error); }
 };
+

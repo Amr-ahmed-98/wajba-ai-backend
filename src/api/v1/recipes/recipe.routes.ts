@@ -8,6 +8,8 @@ import {
 } from "./recipe.validation.js";
 import * as recipeController from "./recipe.controller.js";
 import { authenticate } from "../../../middlewares/Auth.middleware.js";
+import commentRouter from "../comment/comment.routes.js";
+
 
 const router = Router();
 
@@ -406,5 +408,7 @@ router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById
  *         description: Recipe not found
  */
 router.post("/:id/view", authenticate, validate(recordViewSchema), recipeController.recordView);
+
+router.use("/:id", commentRouter);
 
 export default router;

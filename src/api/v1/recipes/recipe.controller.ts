@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import * as recipeService from "../../../services/recipe.service.js";
 import { parseLang } from "../../../services/recipe.service.js";
-
+import { resolveRecipeSource } from "../../../services/unified.service.js";
+import * as userRecipeService from "../../../services/userRecipe.service.js";
 // ─────────────────────────────────────────────────────────────
 // Helper — read Accept-Language header and resolve to "en" | "ar"
 // ─────────────────────────────────────────────────────────────
@@ -226,23 +227,32 @@ export const searchRecipes = async (
 //   ingredients[], instructions[], aiAdvice[],
 //   views, averageRating, ratingCount, commentCount
 // ─────────────────────────────────────────────────────────────
-export const getRecipeById = async (
-  req: Request,
+// recipe.controller.ts — getRecipeById
+export const getRecipeById = async (req: Request,
   res: Response,
-  next: NextFunction
-) => {
+  next: NextFunction) => {
   try {
-    const recipe = await recipeService.getRecipeById(
-      req.params.id as string,
-      getLang(req)
-    );
+    const userId = (req as any).user?.id as string | undefined;
 
-    res.status(200).json({ success: true, data: recipe });
-  } catch (error) {
-    next(error);
-  }
+    // Auto-detect source then fetch + record view atomically
+    const { source } = await resolveRecipeSource(req.params.id as string);
+
+    if (source === "curator") {
+      const recipe = await recipeService.getRecipeById(req.params.id as string, getLang(req));
+      if (userId) {
+        await recipeService.recordView(req.params.id as string, `user:${userId}`);
+      }
+      res.status(200).json({ success: true, data: { ...recipe, _recipeType: "curator" } });
+    } else {
+      const recipe = await userRecipeService.getUserRecipeById(
+        req.params.id as string,
+        userId,
+        getLang(req)
+      );
+      res.status(200).json({ success: true, data: { ...recipe, _recipeType: "user_recipe" } });
+    }
+  } catch (error) { next(error); }
 };
-
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/recipes/:id/view
 // Public — registers one view for this recipe from this viewer.
