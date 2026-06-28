@@ -33,6 +33,9 @@ const router = Router({ mergeParams: true });
  *   get:
  *     summary: Get the authenticated user's rating for this recipe
  *     tags: [Ratings]
+ *     description: >
+ *       Returns the authenticated user's rating for this recipe (null if not yet rated).
+ *       Works for both curator and public user-generated recipes.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -73,11 +76,9 @@ router.get(
  *     summary: Rate a recipe (1–5 stars). Creates or updates the user's rating.
  *     tags: [Ratings]
  *     description: >
- *       One rating per user per recipe. Calling this endpoint a second time
- *       updates the existing rating. The recipe's averageRating and ratingCount
- *       are recalculated and persisted atomically so card-level displays stay
- *       accurate. Sending a rating does NOT require leaving a comment.
- *       To remove a rating (0 stars) use DELETE /ratings instead.
+ *       Rate a recipe 1–5 stars. Works for both curator and public user-generated recipes.
+ *       Private user recipes return 403. One rating per user per recipe — calling again updates it.
+ *       averageRating and ratingCount on the recipe document are recalculated automatically.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -184,10 +185,10 @@ router.delete(
  *     summary: List comments for a recipe (newest first, paginated)
  *     tags: [Comments]
  *     description: >
- *       Public endpoint — no authentication required. Returns top-level
- *       comments with their embedded replies. Each comment and reply includes
- *       the author's name (and photo once profile photos land).
- *       Like/dislike arrays are never exposed — only the integer counts.
+ *       Public endpoint. Returns paginated top-level comments with embedded replies.
+ *       Works for both curator recipes (/api/v1/recipes/:id) and user-generated
+ *       community recipes. Private user recipes return 403.
+ *       Like/dislike arrays never exposed — integer counts only.
  *     parameters:
  *       - in: path
  *         name: id
@@ -258,9 +259,9 @@ router.get(
  *   post:
  *     summary: Add a comment to a recipe
  *     tags: [Comments]
- *     description: >
- *       Authentication required. Commenting and rating are independent —
- *       a user can rate without commenting and comment without rating.
+ *      description: >
+ *       Add a comment to a recipe. Works for both curator and public user-generated recipes.
+ *       Private user recipes return 403. Authentication required.
  *     security:
  *       - bearerAuth: []
  *     parameters:
