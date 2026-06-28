@@ -199,26 +199,6 @@ export const reactToRecipe = async (
   }
 };
 
-// ── POST /:id/bookmark ────────────────────────────────────────
-
-export const bookmarkRecipe = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  try {
-    const { id: userId } = requireUser(req);
-    const result = await userRecipeService.bookmarkUserRecipe(
-      req.params.id as string,
-      userId
-    );
-
-    res.status(200).json({ success: true, data: result });
-  } catch (error) {
-    next(error);
-  }
-};
-
 // ── PATCH /:id/visibility ─────────────────────────────────────
 
 export const toggleVisibility = async (

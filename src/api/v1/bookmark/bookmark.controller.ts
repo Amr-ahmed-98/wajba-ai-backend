@@ -22,14 +22,9 @@ export const addBookmark = async (
     try {
         const userId = req.user!.id;
         const recipeId = req.params.recipeId as string;
-
-        const result = await bookmarkService.addBookmark(userId, recipeId);
-
-        res.status(200).json({
-            success: true,
-            message: "Recipe bookmarked successfully.",
-            data: result,
-        });
+        const type = req.body?.type as "curator" | "user" | undefined;
+        const result = await bookmarkService.addBookmark(userId, recipeId, type);
+        res.status(200).json({ success: true, message: "Recipe bookmarked successfully.", data: result });
     } catch (error) {
         if (error instanceof ApiError) {
             res.status(error.statusCode).json({
@@ -55,14 +50,9 @@ export const removeBookmark = async (
     try {
         const userId = req.user!.id;
         const recipeId = req.params.recipeId as string;
-
-        const result = await bookmarkService.removeBookmark(userId, recipeId);
-
-        res.status(200).json({
-            success: true,
-            message: "Bookmark removed successfully.",
-            data: result,
-        });
+        const type = req.body?.type as "curator" | "user" | undefined;
+        const result = await bookmarkService.removeBookmark(userId, recipeId, type);
+        res.status(200).json({ success: true, message: "Bookmark removed successfully.", data: result });
     } catch (error) {
         if (error instanceof ApiError) {
             res.status(error.statusCode).json({

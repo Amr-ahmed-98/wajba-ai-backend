@@ -754,57 +754,6 @@ router.post(
   userRecipeController.reactToRecipe
 );
 
-// ── BOOKMARK ─────────────────────────────────────────────────
-
-/**
- * @swagger
- * /api/v1/user-recipes/{id}/bookmark:
- *   post:
- *     summary: Toggle bookmark on a user recipe
- *     tags: [User Recipes]
- *     security:
- *       - bearerAuth: []
- *     description: >
- *       Bookmarks the specified recipe for the authenticated user. If the recipe
- *       is already bookmarked, this call removes the bookmark (toggle behaviour).
- *       Returns the updated bookmark state.
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: The unique ID of the user recipe to bookmark.
- *         example: "64f3c2a1b7e4d90012345678"
- *     responses:
- *       200:
- *         description: Bookmark state toggled successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   type: object
- *                   properties:
- *                     bookmarked:
- *                       type: boolean
- *                       description: true if the recipe is now bookmarked, false if removed.
- *                       example: true
- *       401:
- *         description: Authentication required.
- *       404:
- *         description: Recipe not found.
- */
-router.post(
-  "/:id/bookmark",
-  authenticate,
-  validate(toggleVisibilitySchema), // reuses recipeIdParam shape
-  userRecipeController.bookmarkRecipe
-);
 
 // ── VISIBILITY ────────────────────────────────────────────────
 

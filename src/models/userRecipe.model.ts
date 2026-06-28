@@ -46,9 +46,7 @@ export interface IUserRecipe extends Document {
   likedBy: string[];
   dislikedBy: string[];
 
-  // Bookmarks — stored as User ObjectId strings (same pattern as likedBy)
-  bookmarkedBy: string[];
-  bookmarkCount: number;
+
 
   // View count — incremented on every GET /:id
   viewCount: number;
@@ -144,9 +142,6 @@ const userRecipeSchema = new Schema<IUserRecipe>(
     likedBy: { type: [String], default: [], select: false },
     dislikedBy: { type: [String], default: [], select: false },
 
-    // NEW: bookmarks
-    bookmarkedBy: { type: [String], default: [], select: false },
-    bookmarkCount: { type: Number, default: 0 },
 
     // NEW: view count
     viewCount: { type: Number, default: 0 },

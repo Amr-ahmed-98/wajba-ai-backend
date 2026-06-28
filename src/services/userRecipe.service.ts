@@ -897,37 +897,5 @@ export const deleteUserRecipe = async (
   await recipe.deleteOne();
 };
 
-// ─────────────────────────────────────────────────────────────
-// ADD these two functions to the bottom of userRecipe.service.ts
-// ─────────────────────────────────────────────────────────────
 
 
-
-// ── Bookmark toggle ───────────────────────────────────────────
-// Stored on UserRecipe.bookmarkedBy (same pattern as likedBy).
-// Frontend "my bookmarks" should query GET /user-recipes/my-recipes
-// filtered client-side, OR maintain a separate bookmarks array on User.
-// This function toggles the bookmark and syncs bookmarkCount.
-export const bookmarkUserRecipe = async (
-  recipeId: string,
-  userId: string
-): Promise<{ bookmarked: boolean; bookmarkCount: number }> => {
-  if (!mongoose.isValidObjectId(recipeId)) throw new ApiError(400, "Invalid recipe ID.");
-
-  const recipe = await UserRecipe.findById(recipeId).select("isPublic bookmarkedBy bookmarkCount");
-  if (!recipe) throw new ApiError(404, "Recipe not found.");
-  if (!recipe.isPublic) throw new ApiError(403, "Only public community recipes can be bookmarked.");
-
-  const already = (recipe.bookmarkedBy ?? []).includes(userId);
-  const newBookmarkedBy = already
-    ? recipe.bookmarkedBy.filter(id => id !== userId)
-    : [...recipe.bookmarkedBy, userId];
-  const newCount = Math.max(0, (recipe.bookmarkCount ?? 0) + (already ? -1 : 1));
-
-  await UserRecipe.findByIdAndUpdate(
-    recipeId,
-    { bookmarkedBy: newBookmarkedBy, bookmarkCount: newCount },
-    { runValidators: false }
-  );
-  return { bookmarked: !already, bookmarkCount: newCount };
-};
