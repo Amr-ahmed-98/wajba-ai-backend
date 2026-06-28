@@ -14,7 +14,7 @@ import {
   toggleVisibilitySchema,
   deleteUserRecipeSchema,
 } from "./user-recipe.validation.js";
-import userRecipeCommentRouter from "./user-recipe-comment.routes.js";
+
 /**
  * @swagger
  * components:
@@ -858,7 +858,6 @@ router.delete(
   userRecipeController.deleteUserRecipe
 );
 
-router.use("/:id", userRecipeCommentRouter);
 
 
 export default router;
