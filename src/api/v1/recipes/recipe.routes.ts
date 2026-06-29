@@ -7,7 +7,7 @@ import {
   recordViewSchema,
 } from "./recipe.validation.js";
 import * as recipeController from "./recipe.controller.js";
-import { authenticate } from "../../../middlewares/Auth.middleware.js";
+import { authenticate, optionalAuth } from "../../../middlewares/Auth.middleware.js";
 import commentRouter from "../comment/comment.routes.js";
 
 
@@ -359,7 +359,7 @@ router.get("/", validate(listRecipesSchema), recipeController.listRecipes);
  *       404:
  *         description: Recipe not found
  */
-router.get("/:id", validate(getRecipeByIdSchema), recipeController.getRecipeById);
+router.get("/:id", optionalAuth, validate(getRecipeByIdSchema), recipeController.getRecipeById);
 
 // ── POST /api/v1/recipes/:id/view ────────────────────────────
 /**

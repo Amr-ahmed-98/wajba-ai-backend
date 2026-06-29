@@ -634,54 +634,6 @@ router.get(
   userRecipeController.listMyRecipes
 );
 
-// ── SINGLE RECIPE ─────────────────────────────────────────────
-
-/**
- * @swagger
- * /api/v1/user-recipes/{id}:
- *   get:
- *     summary: Get a single user recipe by ID
- *     tags: [User Recipes]
- *     description: >
- *       Fetches full details of a user-generated recipe. Each access increments
- *       the recipe's `viewCount`. Authentication is **optional** — if a valid
- *       Bearer token is supplied the user's bookmark/reaction state is included
- *       in the response. Private recipes are only accessible by their owner.
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: The unique ID of the user recipe.
- *         example: "64f3c2a1b7e4d90012345678"
- *     security:
- *       - bearerAuth: []
- *       - {}
- *     responses:
- *       200:
- *         description: Recipe fetched successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   $ref: '#/components/schemas/UserRecipe'
- *       403:
- *         description: Recipe is private and the requester is not the owner.
- *       404:
- *         description: Recipe not found.
- */
-router.get(
-  "/:id",
-  optionalAuth,
-  validate(getUserRecipeByIdSchema),
-  userRecipeController.getUserRecipeById
-);
 
 // ── REACTIONS ────────────────────────────────────────────────
 
