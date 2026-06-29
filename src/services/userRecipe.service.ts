@@ -782,20 +782,36 @@ export const getUserRecipeById = async (
     throw new ApiError(400, "Invalid recipe ID.");
   }
 
-  // Atomically increment viewCount and return the updated doc
-  const recipe = await UserRecipe.findByIdAndUpdate(
-    recipeId,
-    { $inc: { viewCount: 1 } },
-    { new: true }
-  ).lean();
-
+  const recipe = await UserRecipe.findById(recipeId).lean();
   if (!recipe) throw new ApiError(404, "Recipe not found.");
 
-  if (!recipe.isPublic && recipe.owner.toString() !== requesterId) {
+  const isOwner = recipe.owner.toString() === requesterId;
+
+  if (!recipe.isPublic && !isOwner) {
     throw new ApiError(403, "This recipe is private.");
   }
 
-  return flattenUserRecipe(recipe, lang);
+  // Increment view only after access confirmed
+  await UserRecipe.findByIdAndUpdate(recipeId, { $inc: { viewCount: 1 } });
+
+  const flat = flattenUserRecipe(recipe, lang);
+
+  // Strip social fields for private recipes (owner sees recipe but no social data)
+  if (!recipe.isPublic) {
+    return {
+      ...flat,
+      _recipeType: "user_recipe",
+      _isPublic: false,
+      _socialLocked: true,
+      likes: undefined,
+      dislikes: undefined,
+      averageRating: undefined,
+      ratingCount: undefined,
+      commentCount: undefined,
+    };
+  }
+
+  return { ...flat, _recipeType: "user_recipe", _isPublic: true, _socialLocked: false };
 };
 // ─────────────────────────────────────────────────────────────
 // React to a community recipe — like or dislike
@@ -872,7 +888,6 @@ export const toggleVisibility = async (
     { isPublic: !recipe.isPublic },
     { new: true, select: "isPublic" }
   );
-
   return { isPublic: updated!.isPublic };
 };
 

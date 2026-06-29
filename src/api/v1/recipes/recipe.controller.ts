@@ -242,7 +242,10 @@ export const getRecipeById = async (req: Request,
       if (userId) {
         await recipeService.recordView(req.params.id as string, `user:${userId}`);
       }
-      res.status(200).json({ success: true, data: { ...recipe, _recipeType: "curator" } });
+      res.status(200).json({
+        success: true,
+        data: { ...recipe, _recipeType: "curator", _isPublic: true, _socialLocked: false },
+      });
     } else {
       const recipe = await userRecipeService.getUserRecipeById(
         req.params.id as string,
