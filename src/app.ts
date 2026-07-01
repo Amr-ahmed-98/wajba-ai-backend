@@ -48,7 +48,7 @@ app.use("/api/v1/feedback", feedbackRoutes);
 app.use("/api/v1/recipes", recipeRoutes);
 app.use("/api/v1/bookmarks", bookmarkRoutes);
 app.use("/api/v1/user-recipes", userRecipeRoutes);
-app.use("/api/v1/profiles", profileRoutes);
+app.use("/api/v1/profile", profileRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── Health check ──────────────────────────────────────────────
