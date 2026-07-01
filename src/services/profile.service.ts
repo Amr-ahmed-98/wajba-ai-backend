@@ -138,14 +138,19 @@ export const getPublicProfile = async (
         Rating.countDocuments({ user: userId }),
     ]);
 
-    // Resolve recipe titles for ratings
+    // Resolve recipe titles for BOTH ratings and comments in one pass —
+    // recipe field is polymorphic (points to Recipe or UserRecipe),
+    // same lookup serves both sections.
     const ratingRecipeIds = ratings.map((r: any) => r.recipe);
-    const [curatorForRatings, userForRatings] = await Promise.all([
-        Recipe.find({ _id: { $in: ratingRecipeIds } }).select("title imageUrl").lean(),
-        UserRecipe.find({ _id: { $in: ratingRecipeIds }, isPublic: true }).select("title imageUrl").lean(),
+    const commentRecipeIds = comments.map((c: any) => c.recipe);
+    const allRecipeIds = [...ratingRecipeIds, ...commentRecipeIds];
+
+    const [curatorForRecipes, userForRecipes] = await Promise.all([
+        Recipe.find({ _id: { $in: allRecipeIds } }).select("title imageUrl").lean(),
+        UserRecipe.find({ _id: { $in: allRecipeIds }, isPublic: true }).select("title imageUrl").lean(),
     ]);
     const recipeMap: Record<string, any> = {};
-    [...curatorForRatings, ...userForRatings].forEach((r: any) => {
+    [...curatorForRecipes, ...userForRecipes].forEach((r: any) => {
         recipeMap[String(r._id)] = {
             _id: r._id,
             title: typeof r.title === "object"
@@ -158,6 +163,11 @@ export const getPublicProfile = async (
     const ratingsWithRecipe = ratings.map((r: any) => ({
         ...r,
         recipe: recipeMap[String(r.recipe)] ?? null,
+    }));
+
+    const commentsWithRecipe = comments.map((c: any) => ({
+        ...c,
+        recipe: recipeMap[String(c.recipe)] ?? null,
     }));
 
     const makePagination = (total: number, page: number) => ({
@@ -195,7 +205,7 @@ export const getPublicProfile = async (
             pagination: makePagination(totalLikedUserRecipes, lPage),
         },
         comments: {
-            data: comments,
+            data: commentsWithRecipe,
             pagination: makePagination(totalComments, cPage),
         },
         ratings: {
