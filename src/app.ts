@@ -68,6 +68,11 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
+// ── 404 handler — catch unmatched routes ─────────────────────
+app.use((req: Request, res: Response) => {
+  res.status(404).json({ success: false, message: `Route not found: ${req.method} ${req.originalUrl}` });
+});
+
 // ── Central error handler — MUST be last ─────────────────────
 app.use(errorHandler);
 
