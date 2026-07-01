@@ -9,6 +9,7 @@ import feedbackRoutes from "./api/v1/feedback/feedback.routes.js";
 import recipeRoutes from "./api/v1/recipes/recipe.routes.js";
 import bookmarkRoutes from "./api/v1/bookmark/bookmark.routes.js";
 import userRecipeRoutes from "./api/v1/user-recipes/user-recipe.routes.js";
+import profileRoutes from "./api/v1/profile/profile.routes.js";
 import { errorHandler } from "./middlewares/Errorhandler.middleware.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swager.js";
@@ -47,6 +48,7 @@ app.use("/api/v1/feedback", feedbackRoutes);
 app.use("/api/v1/recipes", recipeRoutes);
 app.use("/api/v1/bookmarks", bookmarkRoutes);
 app.use("/api/v1/user-recipes", userRecipeRoutes);
+app.use("/api/v1/profiles", profileRoutes);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── Health check ──────────────────────────────────────────────

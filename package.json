@@ -26,6 +26,7 @@
     "mongodb": "^7.2.0",
     "mongoose": "^9.6.2",
     "multer": "^2.1.1",
+    "nanoid": "^5.1.16",
     "streamifier": "^0.1.1",
     "stripe": "^22.1.1",
     "swagger-jsdoc": "^6.3.0",
